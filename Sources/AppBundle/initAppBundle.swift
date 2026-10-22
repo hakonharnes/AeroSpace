@@ -21,6 +21,8 @@ import Foundation
         GlobalObserver.initObserver()
         Workspace.garbageCollectUnusedWorkspaces() // init workspaces
         _ = Workspace.all.first?.focusWorkspace()
+        // Windows detected during the startup refresh session are put back where they were
+        let previouslyFocusedWorkspace = loadPersistedLayout()
         await runHeavyCompleteRefreshSession(
             .startup,
             // It's important for the first initialization to be non cancellable
@@ -28,6 +30,10 @@ import Foundation
             assumeCancellable: false,
             layoutWorkspaces: false,
         )
+        if let previouslyFocusedWorkspace {
+            _ = Workspace.get(byName: previouslyFocusedWorkspace).focusWorkspace()
+        }
+        resetClosedWindowsCache() // From now on, the cache serves the lock screen only
         try await runLightSession(.startup, .forceRun) {
             _ = await config.afterStartupCommand.run(.defaultEnv, .emptyStdin)
         }

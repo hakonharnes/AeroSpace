@@ -46,6 +46,10 @@ on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 # Also see: https://nikitabobko.github.io/AeroSpace/goodies#disable-hide-app
 automatically-unhide-macos-hidden-apps = false
 
+# Remember the layout (which windows are on which workspaces, and how they are arranged) and
+# restore it when AeroSpace restarts (e.g. after an update). The layout is not restored after a reboot
+restore-layout-on-restart = true
+
 # List of workspaces that should stay alive even when they contain no windows,
 # even when they are invisible.
 # This config option is only available since 'config-version = 2'
