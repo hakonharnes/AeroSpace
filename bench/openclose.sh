@@ -30,10 +30,14 @@ if test "${SLOW_MS:-40}" != 0; then
     "$out/benchapp" --name slow --windows 1 --slow-ms "${SLOW_MS:-40}" &
     sleep 1.5
 fi
+cpu() { ps -p "$server_pid" -o cputime= | awk -F'[:.]' '{print ($1*60+$2)*1000+$3*10}'; }
+cpu_before=$(cpu)
 for _ in $(seq "$iterations"); do
     kill -USR2 $fast; sleep 1
     kill -USR1 $fast; sleep 1
 done
+cpu_after=$(cpu)
+echo "server cpu ms per open+close: $(( (cpu_after - cpu_before) / iterations ))"
 python3 - "$log" "$label" <<'PY'
 import sys
 lines = [p for p in (l.split(None, 1) for l in open(sys.argv[1])) if len(p) == 2]

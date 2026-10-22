@@ -4,17 +4,45 @@ import Common
 @MainActor
 private var activeRefreshTask: Task<(), any Error>? = nil
 
+/// - Parameter targetPid: the app that caused the event. Only this app is refreshed (new windows, closed windows,
+///   minimized/fullscreen state), the rest of the apps are not asked anything. macOS events are not reliable, that's
+///   why a complete refresh of all the apps follows after a short delay (safety net), once the events calm down
 @MainActor
 func scheduleCancellableCompleteRefreshSession(
     _ event: RefreshSessionEvent,
+    targetPid: pid_t? = nil,
 ) {
     activeRefreshTask?.cancel()
+    let targetApp = targetPid.flatMap { MacApp.allAppsMap[$0] }
+    if targetApp != nil {
+        scheduleSafetyNetRefresh()
+    } else {
+        safetyNetRefreshTask?.cancel() // The complete refresh makes it redundant
+        safetyNetRefreshTask = nil
+    }
     activeRefreshTask = Task.startUnstructured { @MainActor in
         try checkCancellation()
         await runHeavyCompleteRefreshSession(
             event,
             assumeCancellable: true,
+            targetApp: targetApp,
         )
+    }
+}
+
+@MainActor
+private var safetyNetRefreshTask: Task<(), any Error>? = nil
+
+@MainActor
+private func scheduleSafetyNetRefresh() {
+    safetyNetRefreshTask?.cancel()
+    safetyNetRefreshTask = Task.startUnstructured { @MainActor in
+        try await Task.sleep(for: .seconds(1))
+        try checkCancellation()
+        safetyNetRefreshTask = nil
+        if TrayMenuModel.shared.isEnabled {
+            scheduleCancellableCompleteRefreshSession(.safetyNetRefresh)
+        }
     }
 }
 
@@ -23,16 +51,22 @@ func runHeavyCompleteRefreshSession(
     _ event: RefreshSessionEvent,
     assumeCancellable: Bool,
     layoutWorkspaces shouldLayoutWorkspaces: Bool = true,
+    targetApp: MacApp? = nil,
 ) async {
     let state = signposter.beginInterval(#function, "event: \(event) axTaskLocalAppThreadToken: \(axTaskLocalAppThreadToken?.idForDebug)")
     defer { signposter.endInterval(#function, state) }
     if !TrayMenuModel.shared.isEnabled { return }
     let res = await Result {
         try await $refreshSessionEvent.withValue(event) {
-            let snapshot = NativeFocusSnapshot.current
-            let nativeFocused = try await getNativeFocusedWindow(.cancellable)
-            if let nativeFocused { try await debugWindowsIfRecording(nativeFocused, .cancellable) }
-            let deferredNativeFocus = updateFocusCache(nativeFocused, deferJumpToInvisibleWorkspace: true, snapshot)
+            var deferredNativeFocus: Window? = nil
+            // Asking the frontmost app for its focused window is an AX round trip that the whole session waits for.
+            // Skip it if no event that could change the native focus happened since the last sync
+            if !isNativeFocusKnownToBeInSync() {
+                let snapshot = NativeFocusSnapshot.current
+                let nativeFocused = try await getNativeFocusedWindow(.cancellable)
+                if let nativeFocused { try await debugWindowsIfRecording(nativeFocused, .cancellable) }
+                deferredNativeFocus = updateFocusCache(nativeFocused, deferJumpToInvisibleWorkspace: true, snapshot)
+            }
 
             // Don't make the user wait for the slowest app before showing the result. The newly focused window is
             // already registered, and closed windows can be detected without asking the apps. The passes below only
@@ -41,14 +75,18 @@ func runHeavyCompleteRefreshSession(
             if shouldLayoutWorkspaces { try await layoutWorkspaces() }
 
             await refreshModel_nonCancellable()
-            let treeChanged = try await refresh(deferredNativeFocus: deferredNativeFocus, layoutEagerly: shouldLayoutWorkspaces)
+            let treeChanged = if let targetApp {
+                try await refresh(onlyApp: targetApp, deferredNativeFocus: deferredNativeFocus)
+            } else {
+                try await refresh(deferredNativeFocus: deferredNativeFocus, layoutEagerly: shouldLayoutWorkspaces)
+            }
             if deferredNativeFocus != nil { await checkOnFocusChangedCallbacks_nonCancellable() }
             if shouldLayoutWorkspaces && treeChanged { try await layoutWorkspaces() }
             gcMonitors()
 
             updateTrayText()
             SecureInputPanel.shared.refresh()
-            try await normalizeLayoutReason()
+            try await normalizeLayoutReason(onlyApp: targetApp)
             if shouldLayoutWorkspaces { try await layoutWorkspaces() }
         }
     }
@@ -147,6 +185,31 @@ private func garbageCollectWindowsMissingInWindowServer() {
     }
 }
 
+/// Refreshes the windows of a single app. Returns true if windows were garbage collected or registered
+@MainActor
+private func refresh(onlyApp app: MacApp, deferredNativeFocus: Window?) async throws -> Bool {
+    let windowsCountBefore = MacWindow.allWindowsMap.count
+    var treeChanged = false
+    let windowIds: [UInt32]
+    do {
+        windowIds = try await app.refreshAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    } catch {
+        if deferredNativeFocus != nil { forgetLastKnownNativeFocusedWindow() } // Let the next session retry the sync
+        throw error
+    }
+    let alive = windowIds.toSet().filterExistingInWindowServer()
+    for window in MacWindow.allWindows where window.macApp == app && !alive.contains(window.windowId) {
+        window.garbageCollect(skipClosedWindowsCache: false)
+        treeChanged = true
+    }
+    if let deferredNativeFocus { applyDeferredNativeFocus(deferredNativeFocus) }
+    for windowId in windowIds {
+        try await MacWindow.getOrRegister(windowId: windowId, macApp: app)
+    }
+    Workspace.garbageCollectUnusedWorkspaces()
+    return treeChanged || MacWindow.allWindowsMap.count != windowsCountBefore || deferredNativeFocus != nil
+}
+
 /// Returns true if windows were garbage collected or registered
 @MainActor
 private func refresh(deferredNativeFocus: Window?, layoutEagerly: Bool) async throws -> Bool {
@@ -198,10 +261,11 @@ private func refresh(deferredNativeFocus: Window?, layoutEagerly: Bool) async th
 
 func refreshObs(_: AXObserver, _: AXUIElement, notif: CFString, _: UnsafeMutableRawPointer?) {
     let notif = notif as String
+    let pid = axTaskLocalAppThreadToken?.pid // The observer is called on the AX thread of the app
     nativeFocusEpoch.bump()
     Task.startUnstructured { @MainActor in
         if !TrayMenuModel.shared.isEnabled { return }
-        scheduleCancellableCompleteRefreshSession(.ax(notif))
+        scheduleCancellableCompleteRefreshSession(.ax(notif), targetPid: pid)
     }
 }
 

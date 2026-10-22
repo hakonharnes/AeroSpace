@@ -18,9 +18,13 @@ enum GlobalObserver {
                 default: break
             }
         }
+        // The activated app is the only one that could get new windows, the other apps are not asked anything
+        let activatedPid: pid_t? = notification.name == NSWorkspace.didActivateApplicationNotification
+            ? (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            : nil
         Task.startUnstructured { @MainActor in
             if !TrayMenuModel.shared.isEnabled { return }
-            scheduleCancellableCompleteRefreshSession(.globalObserver(notifName))
+            scheduleCancellableCompleteRefreshSession(.globalObserver(notifName), targetPid: activatedPid)
         }
     }
 

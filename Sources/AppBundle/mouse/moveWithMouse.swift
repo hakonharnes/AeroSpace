@@ -9,10 +9,11 @@ func movedObs(_: AXObserver, ax: AXUIElement, notif: CFString, _: UnsafeMutableR
     let notif = notif as String
     // The notification is caused by AeroSpace itself. No need to re-layout everything once again
     if let windowId, isEchoOfFrameAppliedByAeroSpace(windowId, ax) { return }
+    let pid = axTaskLocalAppThreadToken?.pid // The observer is called on the AX thread of the app
     Task.startUnstructured { @MainActor in
         guard let token: RunSessionGuard = .isServerEnabled else { return }
         guard let windowId, let window = Window.get(byId: windowId), try await isManipulatedWithMouse(window) else {
-            scheduleCancellableCompleteRefreshSession(.ax(notif))
+            scheduleCancellableCompleteRefreshSession(.ax(notif), targetPid: pid)
             return
         }
         moveWithMouseTask?.cancel()

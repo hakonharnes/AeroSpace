@@ -1,7 +1,8 @@
 @MainActor
-func normalizeLayoutReason() async throws {
-    let workspaceWindows = Workspace.all.map { ($0, $0.allLeafWindowsRecursive) }
-    let minimizedWindows = macosMinimizedWindowsContainer.children.filterIsInstance(of: Window.self)
+func normalizeLayoutReason(onlyApp: MacApp? = nil) async throws {
+    func ofTheApp(_ window: Window) -> Bool { onlyApp == nil || window.app.pid == onlyApp?.pid }
+    let workspaceWindows = Workspace.all.map { ($0, $0.allLeafWindowsRecursive.filter(ofTheApp)) }
+    let minimizedWindows = macosMinimizedWindowsContainer.children.filterIsInstance(of: Window.self).filter(ofTheApp)
     // Query all the windows concurrently. Windows of different apps are served by different AX threads,
     // querying them one by one makes every refresh session as slow as the sum of all apps' AX latencies
     // https://github.com/nikitabobko/AeroSpace/issues/1615
@@ -10,7 +11,7 @@ func normalizeLayoutReason() async throws {
         try await _normalizeLayoutReason(workspace: workspace, windows: windows, states)
     }
     try await _normalizeLayoutReason(workspace: focus.workspace, windows: minimizedWindows, states)
-    try await validateStillPopups()
+    try await validateStillPopups(ofTheApp)
 }
 
 private struct MacosNativeState {
@@ -46,8 +47,8 @@ private func fetchMacosNativeStates(_ windows: [Window]) async throws -> [UInt32
 }
 
 @MainActor
-private func validateStillPopups() async throws {
-    for node in macosPopupWindowsContainer.children {
+private func validateStillPopups(_ filter: (Window) -> Bool) async throws {
+    for node in macosPopupWindowsContainer.children where filter(node as! MacWindow) {
         let popup = (node as! MacWindow)
         let windowLevel = getWindowLevel(for: popup.windowId)
         if try await popup.isWindowHeuristic(windowLevel, .cancellable) {
