@@ -162,20 +162,33 @@ let serverCpuBefore = cpuMs(args.serverPid)
 for i in 0 ..< args.iterations {
     let (target, shown, hidden, expected) = i % 2 == 0 ? (wsA, idsA, idsB, expectedA) : (wsB, idsB, idsA, expectedB)
     let t0 = now()
+    // BENCH_KEYS="A:18,B:2" switches with a synthetic alt+<keycode> keystroke instead of the CLI (end-to-end latency)
+    var keyProcess: Process? = nil
+    if let keys = ProcessInfo.processInfo.environment["BENCH_KEYS"],
+       let code = keys.split(separator: ",").map { $0.split(separator: ":") }.first(where: { $0[0] == target }).flatMap({ CGKeyCode($0[1]) }) {
+        let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)!
+        let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)!
+        down.flags = .maskAlternate; up.flags = .maskAlternate
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    } else {
+        keyProcess = Process()
+    }
     if let timeline = ProcessInfo.processInfo.environment["BENCH_TIMELINE"] {
         let line = String(format: "T0 %.1f %@\n", t0, target)
         if let h = FileHandle(forWritingAtPath: timeline) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
         else { try? line.write(toFile: timeline, atomically: false, encoding: .utf8) }
     }
-    let p = Process()
-    p.executableURL = URL(filePath: args.cli)
-    p.arguments = ["workspace", target]
-    try! p.run()
+    let p = keyProcess ?? Process()
+    if keyProcess != nil {
+        p.executableURL = URL(filePath: args.cli)
+        p.arguments = ["workspace", target]
+        try! p.run()
+    }
     var cliDone: Double? = nil
     var allHiddenAt: Double? = nil
     var allShownAt: Double? = nil
     while now() - t0 < 3000 {
-        if cliDone == nil && !p.isRunning { cliDone = now() - t0 }
+        if cliDone == nil && (keyProcess == nil || !p.isRunning) { cliDone = now() - t0 }
         let b = bounds(shown + hidden)
         if allHiddenAt == nil && hidden.allSatisfy({ b[$0].map(isHidden) ?? true }) { allHiddenAt = now() - t0 }
         if allShownAt == nil && shown.allSatisfy({ id in b[id].map { r in expected[id].map { close(r, $0) } ?? false } ?? false }) {
@@ -184,7 +197,7 @@ for i in 0 ..< args.iterations {
         if allHiddenAt != nil && allShownAt != nil && cliDone != nil { break }
         usleep(500)
     }
-    p.waitUntilExit()
+    if keyProcess != nil { p.waitUntilExit() }
     if let allHiddenAt, let allShownAt {
         settleTimes.append(max(allHiddenAt, allShownAt))
         shownTimes.append(allShownAt)
