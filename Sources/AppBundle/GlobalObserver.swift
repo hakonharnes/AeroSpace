@@ -13,8 +13,9 @@ enum GlobalObserver {
         if let pid = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier {
             switch notification.name {
                 // Synchronously, before any refresh session observes the native focus change caused by the termination
-                case NSWorkspace.didTerminateApplicationNotification: MainActor.assumeIsolated { onAppTerminated(pid) }
+                case NSWorkspace.didTerminateApplicationNotification: MainActor.assumeIsolated { onAppTerminated(pid); forgetAppHiddenByAeroSpace(pid) }
                 case NSWorkspace.didActivateApplicationNotification: MainActor.assumeIsolated { onAppActivated(pid) }
+                case NSWorkspace.didUnhideApplicationNotification: MainActor.assumeIsolated { forgetAppHiddenByAeroSpace(pid) }
                 default: break
             }
         }
@@ -31,8 +32,10 @@ enum GlobalObserver {
     private static func onHideApp(_ notification: Notification) {
         nativeFocusEpoch.bump()
         let notifName = notification.name.rawValue
+        let pid = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
         Task.startUnstructured { @MainActor in
             guard let token: RunSessionGuard = .isServerEnabled else { return }
+            if let pid, isAppHiddenByAeroSpace(pid) { return } // Hidden by AeroSpace itself, see appHiding.swift
             try await runLightSession(.globalObserver(notifName), token) {
                 if config.automaticallyUnhideMacosHiddenApps {
                     if let w = prevFocus?.windowOrNil,
@@ -45,7 +48,7 @@ enum GlobalObserver {
                         _ = w.focusWindow()
                         w.nativeFocus()
                     }
-                    for app in MacApp.allAppsMap.values {
+                    for app in MacApp.allAppsMap.values where !isAppHiddenByAeroSpace(app.pid) {
                         app.nsApp.unhide()
                     }
                 }

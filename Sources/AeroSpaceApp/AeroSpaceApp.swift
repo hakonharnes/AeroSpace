@@ -5,6 +5,7 @@ import SwiftUI
 
 @main
 struct AeroSpaceApp: App {
+    @NSApplicationDelegateAdaptor(AeroSpaceAppDelegate.self) var appDelegate
     @StateObject var viewModel = TrayMenuModel.shared
     @StateObject var messageModel = MessageModel.shared
     @Environment(\.openWindow) var openWindow: OpenWindowAction
@@ -21,5 +22,13 @@ struct AeroSpaceApp: App {
                     openWindow(id: messageWindowId)
                 }
             }
+    }
+}
+
+/// Quit via Apple event (osascript, logout, shutdown) doesn't go through the menu bar "Quit" button.
+/// Put the windows back before the process dies
+final class AeroSpaceAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { runBeforeTerminationOnce() }
     }
 }

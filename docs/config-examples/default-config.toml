@@ -50,6 +50,11 @@ automatically-unhide-macos-hidden-apps = false
 # restore it when AeroSpace restarts (e.g. after an update). The layout is not restored after a reboot
 restore-layout-on-restart = true
 
+# Hide whole apps when all their windows are on invisible workspaces, instead of moving every window to a corner
+# of the screen. Showing a workspace becomes as fast for slow apps (Electron, browsers) as for fast ones:
+# unhiding is handled by macOS, not by the app. Apps with windows on several workspaces keep using the corner
+hide-apps-on-invisible-workspaces = true
+
 # List of workspaces that should stay alive even when they contain no windows,
 # even when they are invisible.
 # This config option is only available since 'config-version = 2'

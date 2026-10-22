@@ -289,6 +289,7 @@ enum OptimalHideCorner {
 @MainActor
 private func layoutWorkspaces() async throws {
     if !TrayMenuModel.shared.isEnabled {
+        unhideAllAppsHiddenByAeroSpace()
         for workspace in Workspace.all {
             workspace.allLeafWindowsRecursive.forEach { ($0 as! MacWindow).unhideFromCorner() } // todo as!
             try await workspace.layoutWorkspace() // Unhide tiling windows from corner
@@ -322,7 +323,7 @@ private func layoutWorkspaces() async throws {
     }
 
     // to reduce flicker, first unhide visible workspaces, then hide invisible ones
-    var appsOfUnhiddenWindows: Set<MacApp> = []
+    var appsOfUnhiddenWindows: Set<MacApp> = unhideAppsOfVisibleWorkspaces() // ~2ms per app, handled by the system
     for monitor in monitors {
         let workspace = monitor.activeWorkspace
         for window in workspace.allLeafWindowsRecursive {
@@ -338,9 +339,11 @@ private func layoutWorkspaces() async throws {
     await waitForSubmittedAxJobs(appsOfUnhiddenWindows, timeout: .milliseconds(150))
     // Hide concurrently. Windows that are not hidden yet need an AX round trip to remember their position.
     // Doing it one by one makes the windows disappear one after another
-    let toHide = HideRequests(Workspace.all.filter { !$0.isVisible }.flatMap { workspace in
-        let corner = monitorToOptimalHideCorner[workspace.workspaceMonitor.rect.topLeftCorner] ?? .bottomRightCorner
-        return workspace.allLeafWindowsRecursive.map { ($0 as! MacWindow, corner) } // todo as!
+    let invisibleWindows = Workspace.all.filter { !$0.isVisible }.flatMap { $0.allLeafWindowsRecursive.map { $0 as! MacWindow } } // todo as!
+    let cornerWindows = hideAppsOfInvisibleWorkspaces(invisibleWindows)
+    let toHide = HideRequests(cornerWindows.map { window in
+        let corner = window.nodeWorkspace.flatMap { monitorToOptimalHideCorner[$0.workspaceMonitor.rect.topLeftCorner] } ?? .bottomRightCorner
+        return (window, corner)
     })
     try await withThrowingTaskGroup(of: Void.self) { group in
         for index in toHide.requests.indices {

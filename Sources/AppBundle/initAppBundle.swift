@@ -10,9 +10,10 @@ import Foundation
         await waitForAccessibilityPermission_nonCancellable()
         if isDebug {
             await toggleReleaseServerIfDebug(.off)
-            interceptTermination(SIGINT)
-            interceptTermination(SIGKILL)
         }
+        // kill/ctrl-c: put the windows back (and unhide the apps) before dying
+        interceptTermination(SIGINT)
+        interceptTermination(SIGTERM)
 
         await bootstrapConfig_nonCancellable()
         _ = await reloadConfig_nonCancellable()

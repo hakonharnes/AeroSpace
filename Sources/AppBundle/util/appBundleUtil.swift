@@ -12,10 +12,19 @@ func interceptTermination(_ _signal: Int32) {
     signal(_signal, { (signal: Int32) in
         check(Thread.current.isMainThread)
         Task.startUnstructured { @MainActor in
-            terminationHandler?.beforeTermination()
+            runBeforeTerminationOnce()
             exit(signal)
         }
     } as sig_t)
+}
+
+@MainActor private var beforeTerminationDone = false
+
+/// The menu bar Quit, applicationWillTerminate, and signals can all fire for the same quit
+@MainActor public func runBeforeTerminationOnce() {
+    if beforeTerminationDone { return }
+    beforeTerminationDone = true
+    terminationHandler?.beforeTermination()
 }
 
 @MainActor
@@ -26,6 +35,7 @@ func initTerminationHandler() {
 private struct AppServerTerminationHandler: TerminationHandler {
     @MainActor
     func beforeTermination() {
+        unhideAllAppsHiddenByAeroSpace()
         // Make all windows fullscreen before Quit
         for window in MacWindow.allWindowsMap.values {
             // makeAllWindowsVisibleAndRestoreSize may be invoked when something went wrong (e.g. some windows are unbound)

@@ -74,7 +74,10 @@ struct NativeFocusSnapshot: Equatable {
 
 @MainActor func isNativeFocusKnownToBeInSync() -> Bool {
     guard !isUnitTest, let syncedNativeFocus else { return false }
-    return pendingNativeFocusRequest == nil && syncedNativeFocus == .current
+    // A focus request that macOS hasn't processed yet means the native focus is about to change.
+    // Once it's processed (we saw the requested window focused), the request only guards against stale reports
+    if let request = pendingNativeFocusRequest, !request.processed { return false }
+    return syncedNativeFocus == .current
 }
 
 @MainActor func applyDeferredNativeFocus(_ window: Window) {
@@ -164,13 +167,13 @@ private let focusStealGuardDuration: TimeInterval = 1
 // even after it has already reported the requested window). Syncing that stale focus back to AeroSpace makes
 // AeroSpace jump back to the previous workspace and then jump forward again. Status bars that call `aerospace list-*`
 // on every workspace change hit it all the time.
-@MainActor private var pendingNativeFocusRequest: (windowId: UInt32, deadline: Date)? = nil
+@MainActor private var pendingNativeFocusRequest: (windowId: UInt32, deadline: Date, processed: Bool)? = nil
 @MainActor private var pendingNativeFocusRecheck: Task<(), Never>? = nil
 private let nativeFocusRequestTimeout: TimeInterval = 0.5
 private let nativeFocusRequestSettlePeriod: TimeInterval = 0.3
 
 @MainActor func onNativeFocusRequested(_ windowId: UInt32) {
-    pendingNativeFocusRequest = (windowId, .now + nativeFocusRequestTimeout)
+    pendingNativeFocusRequest = (windowId, .now + nativeFocusRequestTimeout, false)
     nativeFocusEpoch.bump()
 }
 
@@ -183,7 +186,7 @@ private let nativeFocusRequestSettlePeriod: TimeInterval = 0.3
     guard let nativeFocused else { return false }
     if nativeFocused.windowId == request.windowId {
         // macOS has processed the request. But the previously focused app may still report itself for a moment
-        pendingNativeFocusRequest = (request.windowId, max(request.deadline, .now + nativeFocusRequestSettlePeriod))
+        pendingNativeFocusRequest = (request.windowId, max(request.deadline, .now + nativeFocusRequestSettlePeriod), true)
         return false
     }
     // Focusing a window on a visible workspace (e.g. a click) is never a stale report of the previous workspace

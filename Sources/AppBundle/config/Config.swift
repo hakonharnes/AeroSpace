@@ -45,6 +45,7 @@ struct Config: ConvenienceMutable {
     var autoReloadConfig: Bool = false
     var automaticallyUnhideMacosHiddenApps: Bool = false
     var restoreLayoutOnRestart: Bool = true
+    var hideAppsOnInvisibleWorkspaces: Bool = true
     var accordionPadding: Int = 30
     var enableNormalizationOppositeOrientationForNestedContainers: Bool = true
     var persistentWorkspaces: OrderedSet<String> = []

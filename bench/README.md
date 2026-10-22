@@ -23,7 +23,13 @@ Metrics:
 
 `bench/openclose.sh <server> <cli> <label> [iterations]` measures how long it takes until the layout settles after
 a window is opened or closed (`new window first tiled`, `layout settled`), based on the frame changes the test app
-reports itself.
+reports itself, plus the server's CPU time per open+close.
+
+`bench/exposure.swift <ms> <window-ids> <command...>` measures how much of the screen area that stays covered by the
+given windows shows the desktop while a command runs (e.g. `aerospace fullscreen on`).
+
+The scripts only need the `aerospace` CLI subset `workspace`, `list-workspaces --focused`, `list-windows --workspace|--all
+--format`, so other window managers that speak it can be measured with the same harness (see ~/window-manager/poc).
 
 Results are noisy (the slow app answers AX requests at random moments), run the builds you compare interleaved.
 
