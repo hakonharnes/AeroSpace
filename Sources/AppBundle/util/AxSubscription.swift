@@ -14,9 +14,9 @@ final class AxSubscription {
         self.ax = ax
     }
 
-    private func subscribe(_ key: String) throws -> Bool {
+    private func subscribe(_ key: String, _ refcon: UnsafeMutableRawPointer?) throws -> Bool {
         axThreadToken.checkEquals(axTaskLocalAppThreadToken)
-        if AXObserverAddNotification(obs, ax, key as CFString, nil) == .success {
+        if unsafe AXObserverAddNotification(obs, ax, key as CFString, refcon) == .success {
             notifKeys.insert(key)
             return true
         } else {
@@ -24,11 +24,14 @@ final class AxSubscription {
         }
     }
 
+    /// - Parameter refcon: passed to the handlers as is. The handlers of a destroyed element can't ask the element
+    ///   anything anymore, that's how they learn which window it was
     static func bulkSubscribe(
         _ nsApp: NSRunningApplication,
         _ ax: AXUIElement,
         _ job: RunLoopJob,
         _ handlerToNotifKeyMapping: HandlerToNotifKeyMapping,
+        refcon: UnsafeMutableRawPointer? = nil,
     ) throws -> [AxSubscription] {
         var result: [AxSubscription] = []
         var visitedNotifKeys: Set<String> = []
@@ -39,7 +42,7 @@ final class AxSubscription {
             for key: String in notifKeys {
                 try job.checkCancellation()
                 assert(visitedNotifKeys.insert(key).inserted)
-                if try !subscription.subscribe(key) { return [] }
+                if try unsafe !subscription.subscribe(key, refcon) { return [] }
             }
             CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(obs), .defaultMode)
             result.append(subscription)

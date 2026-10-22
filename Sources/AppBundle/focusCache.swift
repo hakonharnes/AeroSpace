@@ -64,6 +64,14 @@ struct NativeFocusSnapshot: Equatable {
 
 @MainActor private var syncedNativeFocus: NativeFocusSnapshot? = nil
 
+/// Like getNativeFocusedWindow, but doesn't ask the app if the answer is known to be the same as the last time
+@MainActor func getNativeFocusedWindowUsingCache(_ cm: CancellationMode) async throws -> Window? {
+    if isNativeFocusKnownToBeInSync() {
+        return lastKnownNativeFocusedWindowId.flatMap { Window.get(byId: $0) }
+    }
+    return try await getNativeFocusedWindow(cm)
+}
+
 @MainActor func isNativeFocusKnownToBeInSync() -> Bool {
     guard !isUnitTest, let syncedNativeFocus else { return false }
     return pendingNativeFocusRequest == nil && syncedNativeFocus == .current

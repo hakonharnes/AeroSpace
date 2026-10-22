@@ -406,7 +406,7 @@ private final class AxWindow {
             (movedObs, [kAXMovedNotification]),
             (resizedObs, [kAXResizedNotification]),
         ]
-        let subscriptions = try unsafe AxSubscription.bulkSubscribe(nsApp, ax, job, handlers)
+        let subscriptions = try unsafe AxSubscription.bulkSubscribe(nsApp, ax, job, handlers, refcon: windowIdToRefcon(windowId))
         return !subscriptions.isEmpty ? AxWindow(windowId: windowId, ax, subscriptions) : nil
     }
 }
@@ -588,4 +588,13 @@ private final class AppliedFrames {
 /// Must be called on the AX thread of the app that owns the window (AX observers are called on that thread)
 func isEchoOfFrameAppliedByAeroSpace(_ windowId: UInt32, _ window: AXUIElement) -> Bool {
     AppliedFrames.ofCurrentThread.isEcho(windowId, window)
+}
+
+/// The window id is smuggled through the refcon pointer of AX notifications (no allocation, nothing to free)
+func windowIdToRefcon(_ windowId: UInt32) -> UnsafeMutableRawPointer? {
+    unsafe UnsafeMutableRawPointer(bitPattern: UInt(windowId))
+}
+
+func refconToWindowId(_ refcon: UnsafeMutableRawPointer?) -> UInt32? {
+    unsafe refcon.map { UInt32(truncatingIfNeeded: UInt(bitPattern: $0)) }
 }

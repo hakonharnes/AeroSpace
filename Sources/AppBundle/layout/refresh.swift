@@ -261,12 +261,23 @@ private func refresh(deferredNativeFocus: Window?, layoutEagerly: Bool) async th
     return treeChanged || MacWindow.allWindowsMap.count != windowsCountBefore || deferredNativeFocus != nil
 }
 
-func refreshObs(_: AXObserver, _: AXUIElement, notif: CFString, _: UnsafeMutableRawPointer?) {
+func refreshObs(_: AXObserver, ax: AXUIElement, notif: CFString, refcon: UnsafeMutableRawPointer?) {
     let notif = notif as String
     let pid = axTaskLocalAppThreadToken?.pid // The observer is called on the AX thread of the app
     nativeFocusEpoch.bump()
+    // The notification says which window is destroyed, no need to ask the app for its windows to find out.
+    // The element can't be asked anything anymore (that's the confirmation that it's dead), the id comes from refcon
+    let destroyedWindowId: UInt32? = notif == kAXUIElementDestroyedNotification && ax.containingWindowId() == nil
+        ? unsafe refconToWindowId(refcon)
+        : nil
     Task.startUnstructured { @MainActor in
         if !TrayMenuModel.shared.isEnabled { return }
+        // WindowServer still shows the window for a while (it fades out), so it can't confirm the death. If an app
+        // ever recreates the AX element of a live window, the window is re-detected by the refresh session below and
+        // closedWindowsCache puts it back where it was
+        if let destroyedWindowId, let window = MacWindow.allWindowsMap[destroyedWindowId], window.app.pid == pid {
+            window.garbageCollect(skipClosedWindowsCache: false)
+        }
         scheduleCancellableCompleteRefreshSession(.ax(notif), targetPid: pid)
     }
 }
