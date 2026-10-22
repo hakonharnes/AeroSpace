@@ -129,6 +129,7 @@ final class MacApp: AbstractApp {
 
     @MainActor func nativeFocus(_ windowId: UInt32) {
         if serverArgs.isReadOnly { return }
+        onNativeFocusRequested(windowId)
         MacApp.focusJob?.cancel()
         // Performance optimization. If possible avoid doing AX requests
         // (important for apps which are slow at responding even such basic AX requests. E.g. Godot)
@@ -150,9 +151,17 @@ final class MacApp: AbstractApp {
     func setAxFrame(_ windowId: UInt32, _ topLeft: CGPoint?, _ size: CGSize?) {
         setFrameJobs.removeValue(forKey: windowId)?.cancel()
         setFrameJobs[windowId] = withWindowAsync(windowId, .cancellable) { [axApp] window, job in
-            try disableAnimations(app: axApp.threadGuarded, job) {
-                try setFrame(window, topLeft, size, job)
+            let appliedFrames = AppliedFrames.ofCurrentThread
+            // Every refresh session re-layouts all the windows. Most of the time, nothing changes.
+            // Skipping redundant writes saves AX round trips (that's a lot for apps that are slow at answering AX
+            // requests), and the apps don't need to process no-op frame changes
+            guard let sizeToWrite = try appliedFrames.plan(windowId, window, topLeft, size, job) else { return }
+            let knownSize = size ?? appliedFrames.knownSize(windowId)
+            appliedFrames.forget(windowId) // The job might be cancelled in the middle
+            try disableAnimations(app: axApp.threadGuarded, appliedFrames, job) {
+                try setFrame(window, topLeft, sizeToWrite.size, job)
             }
+            appliedFrames.remember(windowId, topLeft, size, knownSize: knownSize)
         }
     }
 
@@ -160,7 +169,8 @@ final class MacApp: AbstractApp {
         setFrameJobs.removeValue(forKey: windowId)?.cancel()
         let semaphore = DispatchSemaphore(value: 0)
         let job = withWindowAsync(windowId, .nonCancellable) { [axApp] window, job in
-            try? disableAnimations(app: axApp.threadGuarded, job) {
+            AppliedFrames.ofCurrentThread.forget(windowId)
+            try? disableAnimations(app: axApp.threadGuarded, AppliedFrames.ofCurrentThread, job) {
                 try setFrame(window, topLeft, size, job)
             }
             semaphore.signal()
@@ -168,6 +178,15 @@ final class MacApp: AbstractApp {
         switch job.isCancelled {
             case true: return
             case false: semaphore.wait()
+        }
+    }
+
+    /// Calls `onDone` (on an arbitrary thread) once all the AX jobs submitted to the app so far are done
+    func submitBarrier(_ onDone: @Sendable @escaping () -> ()) {
+        if let thread {
+            thread.runInLoopAsync(job: RunLoopJob(.nonCancellable)) { _ in onDone() }
+        } else {
+            onDone()
         }
     }
 
@@ -215,6 +234,7 @@ final class MacApp: AbstractApp {
     func setNativeFullscreen(_ windowId: UInt32, _ value: Bool) {
         setFrameJobs.removeValue(forKey: windowId)?.cancel()
         setFrameJobs[windowId] = withWindowAsync(windowId, .cancellable) { window, job in
+            AppliedFrames.ofCurrentThread.forget(windowId)
             window.set(Ax.isFullscreenAttr, value)
         }
     }
@@ -222,6 +242,7 @@ final class MacApp: AbstractApp {
     func setNativeMinimized(_ windowId: UInt32, _ value: Bool) {
         setFrameJobs.removeValue(forKey: windowId)?.cancel()
         setFrameJobs[windowId] = withWindowAsync(windowId, .cancellable) { window, job in
+            AppliedFrames.ofCurrentThread.forget(windowId)
             window.set(Ax.minimizedAttr, value)
         }
     }
@@ -421,8 +442,8 @@ private func setFrame(_ window: AXUIElement, _ topLeft: CGPoint?, _ size: CGSize
 // Some undocumented magic
 // References: https://github.com/koekeishiya/yabai/commit/3fe4c77b001e1a4f613c26f01ea68c0f09327f3a
 //             https://github.com/rxhanson/Rectangle/pull/285
-private func disableAnimations<T>(app: AXUIElement, _ job: RunLoopJob, _ body: () throws -> T) throws -> T {
-    let wasEnabled = app.get(Ax.enhancedUserInterfaceAttr) == true
+private func disableAnimations<T>(app: AXUIElement, _ appliedFrames: AppliedFrames, _ job: RunLoopJob, _ body: () throws -> T) throws -> T {
+    let wasEnabled = appliedFrames.isEnhancedUserInterfaceEnabled(app)
     if wasEnabled {
         app.set(Ax.enhancedUserInterfaceAttr, false)
     }
@@ -433,4 +454,104 @@ private func disableAnimations<T>(app: AXUIElement, _ job: RunLoopJob, _ body: (
     }
     try job.checkCancellation()
     return try body()
+}
+
+/// Frames that AeroSpace applied to the windows of an app.
+/// Lives in the AX thread of the app. The AX observers of the app are called on the same thread.
+private final class AppliedFrames {
+    private struct Entry {
+        let topLeft: CGPoint?
+        let size: CGSize?
+        /// The last size AeroSpace applied to the window. Survives position-only requests (hiding in the corner)
+        let knownSize: CGSize?
+        let appliedAt: UInt64
+        var verifiedAt: UInt64
+        var mightBeChangedExternally: Bool = false
+
+        func matches(_ rect: Rect) -> Bool {
+            (topLeft.map { abs($0.x - rect.topLeftX) <= 1 && abs($0.y - rect.topLeftY) <= 1 } ?? true) &&
+                (size.map { abs($0.width - rect.width) <= 1 && abs($0.height - rect.height) <= 1 } ?? true)
+        }
+    }
+
+    struct SizeToWrite { let size: CGSize? }
+
+    private var entries: [UInt32: Entry] = [:]
+    private var enhancedUserInterface: (isEnabled: Bool, checkedAt: UInt64)? = nil
+
+    // Re-check the actual frame from time to time, in case we missed kAXMovedNotification/kAXResizedNotification
+    private static let trustPeriodNs: UInt64 = 2_000_000_000
+    // AX notifications caused by AeroSpace's own frame changes arrive shortly after the change
+    private static let echoPeriodNs: UInt64 = 1_000_000_000
+    private static let enhancedUserInterfaceTrustPeriodNs: UInt64 = 1_000_000_000
+
+    static var ofCurrentThread: AppliedFrames {
+        let key = "AeroSpace.AppliedFrames"
+        if let existing = Thread.current.threadDictionary[key] as? AppliedFrames { return existing }
+        let new = AppliedFrames()
+        Thread.current.threadDictionary[key] = new
+        return new
+    }
+
+    func forget(_ windowId: UInt32) {
+        entries.removeValue(forKey: windowId)
+    }
+
+    func knownSize(_ windowId: UInt32) -> CGSize? {
+        entries[windowId].flatMap { $0.mightBeChangedExternally ? nil : $0.knownSize }
+    }
+
+    func remember(_ windowId: UInt32, _ topLeft: CGPoint?, _ size: CGSize?, knownSize: CGSize?) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        entries[windowId] = Entry(topLeft: topLeft, size: size, knownSize: knownSize, appliedAt: now, verifiedAt: now)
+    }
+
+    /// Returns nil if the requested frame is already applied. Otherwise, returns what needs to be written
+    func plan(_ windowId: UInt32, _ window: AXUIElement, _ topLeft: CGPoint?, _ size: CGSize?, _ job: RunLoopJob) throws -> SizeToWrite? {
+        guard let entry = entries[windowId] else { return SizeToWrite(size: size) }
+        let now = DispatchTime.now().uptimeNanoseconds
+        if entry.topLeft == topLeft && entry.size == size {
+            if !entry.mightBeChangedExternally && now - entry.verifiedAt < Self.trustPeriodNs { return nil }
+            if let actual = try getAxRect(window: window, job: job), entry.matches(actual) {
+                entries[windowId]?.verifiedAt = now
+                entries[windowId]?.mightBeChangedExternally = false
+                return nil
+            }
+            return SizeToWrite(size: size)
+        }
+        // E.g. unhiding a window from the corner. Only the position changes, setting the size is 2 extra round trips
+        if topLeft != nil, let size, !entry.mightBeChangedExternally, entry.knownSize == size {
+            return SizeToWrite(size: nil)
+        }
+        return SizeToWrite(size: size)
+    }
+
+    /// Returns true if the window has the frame that AeroSpace has just applied.
+    /// It means that kAXMovedNotification/kAXResizedNotification is caused by AeroSpace itself
+    func isEcho(_ windowId: UInt32, _ window: AXUIElement) -> Bool {
+        guard let entry = entries[windowId] else { return false }
+        if DispatchTime.now().uptimeNanoseconds - entry.appliedAt < Self.echoPeriodNs,
+           let actual = try? getAxRect(window: window, job: RunLoopJob(.nonCancellable)),
+           entry.matches(actual)
+        {
+            return true
+        }
+        entries[windowId]?.mightBeChangedExternally = true
+        return false
+    }
+
+    func isEnhancedUserInterfaceEnabled(_ app: AXUIElement) -> Bool {
+        let now = DispatchTime.now().uptimeNanoseconds
+        if let eui = enhancedUserInterface, now - eui.checkedAt < Self.enhancedUserInterfaceTrustPeriodNs {
+            return eui.isEnabled
+        }
+        let isEnabled = app.get(Ax.enhancedUserInterfaceAttr) == true
+        enhancedUserInterface = (isEnabled, now)
+        return isEnabled
+    }
+}
+
+/// Must be called on the AX thread of the app that owns the window (AX observers are called on that thread)
+func isEchoOfFrameAppliedByAeroSpace(_ windowId: UInt32, _ window: AXUIElement) -> Bool {
+    AppliedFrames.ofCurrentThread.isEcho(windowId, window)
 }

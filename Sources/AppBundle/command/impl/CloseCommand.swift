@@ -14,6 +14,7 @@ struct CloseCommand: Command {
         if await args.quitIfLastWindow.andAsync({ @MainActor @Sendable in (try? await window.macAppUnsafe.getAxWindowsCount(.nonCancellable)) == 1 }) {
             let app = window.macAppUnsafe
             if app.nsApp.terminate() {
+                rememberAppQuitByAeroSpace(app.pid)
                 for workspace in Workspace.all {
                     for window in workspace.allLeafWindowsRecursive where window.app.pid == app.pid {
                         (window as! MacWindow).garbageCollect(skipClosedWindowsCache: true)

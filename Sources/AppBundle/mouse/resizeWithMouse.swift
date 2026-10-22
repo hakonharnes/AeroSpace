@@ -7,6 +7,8 @@ private var resizeWithMouseTask: Task<(), any Error>? = nil
 func resizedObs(_: AXObserver, ax: AXUIElement, notif: CFString, _: UnsafeMutableRawPointer?) {
     let notif = notif as String
     let windowId = ax.containingWindowId()
+    // The notification is caused by AeroSpace itself. No need to re-layout everything once again
+    if let windowId, isEchoOfFrameAppliedByAeroSpace(windowId, ax) { return }
     Task.startUnstructured { @MainActor in
         guard let token: RunSessionGuard = .isServerEnabled else { return }
         guard let windowId, let window = Window.get(byId: windowId), try await isManipulatedWithMouse(window) else {

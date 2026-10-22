@@ -1,11 +1,48 @@
 @MainActor
 func normalizeLayoutReason() async throws {
-    for workspace in Workspace.all {
-        let windows: [Window] = workspace.allLeafWindowsRecursive
-        try await _normalizeLayoutReason(workspace: workspace, windows: windows)
+    let workspaceWindows = Workspace.all.map { ($0, $0.allLeafWindowsRecursive) }
+    let minimizedWindows = macosMinimizedWindowsContainer.children.filterIsInstance(of: Window.self)
+    // Query all the windows concurrently. Windows of different apps are served by different AX threads,
+    // querying them one by one makes every refresh session as slow as the sum of all apps' AX latencies
+    // https://github.com/nikitabobko/AeroSpace/issues/1615
+    let states = try await fetchMacosNativeStates(workspaceWindows.flatMap { $0.1 } + minimizedWindows)
+    for (workspace, windows) in workspaceWindows {
+        try await _normalizeLayoutReason(workspace: workspace, windows: windows, states)
     }
-    try await _normalizeLayoutReason(workspace: focus.workspace, windows: macosMinimizedWindowsContainer.children.filterIsInstance(of: Window.self))
+    try await _normalizeLayoutReason(workspace: focus.workspace, windows: minimizedWindows, states)
     try await validateStillPopups()
+}
+
+private struct MacosNativeState {
+    let isFullscreen: Bool
+    let isMinimized: Bool
+}
+
+/// Main actor isolated, hence Sendable. Allows passing windows to the task group children
+@MainActor
+private final class WindowsRef {
+    let windows: [Window]
+    init(_ windows: [Window]) { self.windows = windows }
+}
+
+@MainActor
+private func fetchMacosNativeStates(_ windows: [Window]) async throws -> [UInt32: MacosNativeState] {
+    let ref = WindowsRef(windows)
+    return try await withThrowingTaskGroup(of: (UInt32, MacosNativeState).self) { group in
+        for index in ref.windows.indices {
+            group.addTask { @Sendable @MainActor in
+                let window = ref.windows[index]
+                let isFullscreen = try await window.isMacosFullscreen(.cancellable)
+                let isMinimized = try await (!isFullscreen).andAsync { @MainActor @Sendable in try await window.isMacosMinimized(.cancellable) }
+                return (window.windowId, MacosNativeState(isFullscreen: isFullscreen, isMinimized: isMinimized))
+            }
+        }
+        var result: [UInt32: MacosNativeState] = [:]
+        for try await (windowId, state) in group {
+            result[windowId] = state
+        }
+        return result
+    }
 }
 
 @MainActor
@@ -21,10 +58,11 @@ private func validateStillPopups() async throws {
 }
 
 @MainActor
-private func _normalizeLayoutReason(workspace: Workspace, windows: [Window]) async throws {
+private func _normalizeLayoutReason(workspace: Workspace, windows: [Window], _ states: [UInt32: MacosNativeState]) async throws {
     for window in windows {
-        let isMacosFullscreen = try await window.isMacosFullscreen(.cancellable)
-        let isMacosMinimized = try await (!isMacosFullscreen).andAsync { @MainActor @Sendable in try await window.isMacosMinimized(.cancellable) }
+        guard let state = states[window.windowId] else { continue }
+        let isMacosFullscreen = state.isFullscreen
+        let isMacosMinimized = state.isMinimized
         let isMacosWindowOfHiddenApp = !isMacosFullscreen && !isMacosMinimized &&
             !config.automaticallyUnhideMacosHiddenApps && window.macAppUnsafe.nsApp.isHidden
         switch window.layoutReason {

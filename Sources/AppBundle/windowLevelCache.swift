@@ -56,3 +56,18 @@ enum MacOsWindowLevel: Sendable, Equatable {
         }
     }
 }
+
+extension Set<UInt32> {
+    /// Returns self if WindowServer can't be asked
+    func filterExistingInWindowServer() -> Set<UInt32> {
+        if isEmpty { return self }
+        // The array must contain raw CGWindowIDs, not boxed numbers
+        var ids = map { unsafe UnsafeRawPointer(bitPattern: UInt($0)) }
+        guard let array = unsafe CFArrayCreate(nil, &ids, ids.count, nil),
+              let infos = CGWindowListCreateDescriptionFromArray(array) as? [NSDictionary],
+              !infos.isEmpty // Something is wrong. Don't kill all the windows
+        else { return self }
+        let existing = infos.compactMap { ($0[kCGWindowNumber] as? NSNumber)?.uint32Value }.toSet()
+        return filter { existing.contains($0) }
+    }
+}

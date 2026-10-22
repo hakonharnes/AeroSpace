@@ -40,6 +40,7 @@ func setUpWorkspacesForTests() {
     TestApp.shared.windows = []
 
     global_layoutForNextDetectedWindow = nil
+    resetNativeFocusGuardsForTests()
 }
 
 extension ParsedCmd {

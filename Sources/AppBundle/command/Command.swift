@@ -13,6 +13,15 @@ protocol Command: AeroAny, Equatable, Sendable {
 }
 
 extension Command {
+    /// The command only reads the state. It doesn't change the tree, the focus, or windows
+    var isReadOnlyQuery: Bool {
+        switch self {
+            case is ListAppsCommand, is ListExecEnvVarsCommand, is ListModesCommand, is ListMonitorsCommand,
+                 is ListWindowsCommand, is ListWorkspacesCommand, is ConfigCommand: true
+            default: false
+        }
+    }
+
     static func == (lhs: Self, rhs: Self) -> Bool {
         return lhs.args.equals(rhs.args)
     }

@@ -32,14 +32,16 @@ func runHeavyCompleteRefreshSession(
     if !TrayMenuModel.shared.isEnabled { return }
     let res = await Result {
         try await $refreshSessionEvent.withValue(event) {
+            let snapshot = NativeFocusSnapshot.current
             let nativeFocused = try await getNativeFocusedWindow(.cancellable)
             if let nativeFocused { try await debugWindowsIfRecording(nativeFocused, .cancellable) }
-            updateFocusCache(nativeFocused)
+            let deferredNativeFocus = updateFocusCache(nativeFocused, deferJumpToInvisibleWorkspace: true, snapshot)
 
             if shouldLayoutWorkspaces && optimisticallyPreLayoutWorkspaces { try await layoutWorkspaces() }
 
             await refreshModel_nonCancellable()
-            try await refresh()
+            try await refresh(deferredNativeFocus: deferredNativeFocus)
+            if deferredNativeFocus != nil { await checkOnFocusChangedCallbacks_nonCancellable() }
             gcMonitors()
 
             updateTrayText()
@@ -59,16 +61,23 @@ func runHeavyCompleteRefreshSession(
 func runLightSession<T>(
     _ event: RefreshSessionEvent,
     _: RunSessionGuard,
+    isReadOnly: Bool = false,
     body: @MainActor () async throws -> T,
 ) async throws -> T {
     let state = signposter.beginInterval(#function, "event: \(event) axTaskLocalAppThreadToken: \(axTaskLocalAppThreadToken?.idForDebug)")
     defer { signposter.endInterval(#function, state) }
-    activeRefreshTask?.cancel() // Give priority to runSession
-    activeRefreshTask = nil
+    if !isReadOnly { // Read-only sessions don't schedule a new complete refresh. Don't cancel the active one
+        activeRefreshTask?.cancel() // Give priority to runSession
+        activeRefreshTask = nil
+    }
     return try await $refreshSessionEvent.withValue(event) {
-        let nativeFocused = try await getNativeFocusedWindow(.cancellable)
-        if let nativeFocused { try await debugWindowsIfRecording(nativeFocused, .cancellable) }
-        updateFocusCache(nativeFocused)
+        let focusBeforeSync = focus
+        if !isNativeFocusKnownToBeInSync() {
+            let snapshot = NativeFocusSnapshot.current
+            let nativeFocused = try await getNativeFocusedWindow(.cancellable)
+            if let nativeFocused { try await debugWindowsIfRecording(nativeFocused, .cancellable) }
+            _ = updateFocusCache(nativeFocused, snapshot)
+        }
         let focusBefore = focus.windowOrNil
 
         await refreshModel_nonCancellable()
@@ -79,6 +88,10 @@ func runLightSession<T>(
 
         updateTrayText()
         SecureInputPanel.shared.refresh()
+        // Queries (list-windows, list-workspaces, etc.) don't change anything. Status bars call them a lot,
+        // don't re-layout all the windows and don't trigger a complete refresh session on every call
+        // https://github.com/nikitabobko/AeroSpace/issues/104
+        if isReadOnly && focus == focusBeforeSync { return result }
         if !event.isFocusFollowsMouse { try await layoutWorkspaces() }
         if focusBefore != focusAfter {
             focusAfter?.nativeFocus() // syncFocusToMacOs
@@ -120,16 +133,27 @@ func refreshModel_nonCancellable() async {
 }
 
 @MainActor
-private func refresh() async throws {
+private func refresh(deferredNativeFocus: Window?) async throws {
     // Garbage collect terminated apps and windows before working with all windows
-    let mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
-    let aliveWindowIds = mapping.values.flatMap(id).toSet()
+    let mapping: [MacApp: [UInt32]]
+    do {
+        mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+    } catch {
+        if deferredNativeFocus != nil { forgetLastKnownNativeFocusedWindow() } // Let the next session retry the sync
+        throw error
+    }
+    // Ghost windows: on recent macOS versions, the AX element of a closed window might keep answering its window id.
+    // A window that doesn't exist in WindowServer is dead for sure (minimized windows, windows of hidden apps, and
+    // windows on other macOS Spaces do exist there). https://github.com/nikitabobko/AeroSpace/issues/1615
+    let aliveWindowIds = mapping.values.flatMap(id).toSet().filterExistingInWindowServer()
 
     for window in MacWindow.allWindows {
         if !aliveWindowIds.contains(window.windowId) {
             window.garbageCollect(skipClosedWindowsCache: false)
         }
     }
+    // Sync the native focus only after dead windows are garbage collected. See updateFocusCache
+    if let deferredNativeFocus { applyDeferredNativeFocus(deferredNativeFocus) }
     for (app, windowIds) in mapping {
         for windowId in windowIds {
             try await MacWindow.getOrRegister(windowId: windowId, macApp: app)
@@ -142,6 +166,7 @@ private func refresh() async throws {
 
 func refreshObs(_: AXObserver, _: AXUIElement, notif: CFString, _: UnsafeMutableRawPointer?) {
     let notif = notif as String
+    nativeFocusEpoch.bump()
     Task.startUnstructured { @MainActor in
         if !TrayMenuModel.shared.isEnabled { return }
         scheduleCancellableCompleteRefreshSession(.ax(notif))
@@ -188,17 +213,74 @@ private func layoutWorkspaces() async throws {
     }
 
     // to reduce flicker, first unhide visible workspaces, then hide invisible ones
+    var appsOfUnhiddenWindows: Set<MacApp> = []
     for monitor in monitors {
         let workspace = monitor.activeWorkspace
-        workspace.allLeafWindowsRecursive.forEach { ($0 as! MacWindow).unhideFromCorner() } // todo as!
+        for window in workspace.allLeafWindowsRecursive {
+            let window = window as! MacWindow // todo as!
+            if window.isHiddenInCorner { appsOfUnhiddenWindows.insert(window.macApp) }
+            window.unhideFromCorner()
+        }
         try await workspace.layoutWorkspace()
     }
-    for workspace in Workspace.all where !workspace.isVisible {
+    // Don't hide the windows of the previous workspace until the windows of the new workspace are in place.
+    // Otherwise, the wallpaper flickers when the apps of the new workspace are slower at answering AX requests
+    // https://github.com/nikitabobko/AeroSpace/issues/1305
+    await waitForSubmittedAxJobs(appsOfUnhiddenWindows, timeout: .milliseconds(150))
+    // Hide concurrently. Windows that are not hidden yet need an AX round trip to remember their position.
+    // Doing it one by one makes the windows disappear one after another
+    let toHide = HideRequests(Workspace.all.filter { !$0.isVisible }.flatMap { workspace in
         let corner = monitorToOptimalHideCorner[workspace.workspaceMonitor.rect.topLeftCorner] ?? .bottomRightCorner
-        for window in workspace.allLeafWindowsRecursive {
-            try await (window as! MacWindow).hideInCorner(corner) // todo as!
+        return workspace.allLeafWindowsRecursive.map { ($0 as! MacWindow, corner) } // todo as!
+    })
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        for index in toHide.requests.indices {
+            group.addTask { @Sendable @MainActor in
+                let (window, corner) = toHide.requests[index]
+                try await window.hideInCorner(corner)
+            }
+        }
+        try await group.waitForAll()
+    }
+}
+
+@MainActor
+private func waitForSubmittedAxJobs(_ apps: Set<MacApp>, timeout: Duration) async {
+    if apps.isEmpty { return }
+    let latch = CountDownLatch(apps.count)
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        latch.onDone = { cont.resume() }
+        for app in apps {
+            app.submitBarrier { Task.startUnstructured { @MainActor in latch.countDown() } }
+        }
+        Task.startUnstructured { @MainActor in
+            try? await Task.sleep(for: timeout)
+            latch.release()
         }
     }
+}
+
+@MainActor
+private final class CountDownLatch {
+    private var count: Int
+    var onDone: (() -> ())? = nil
+    init(_ count: Int) { self.count = count }
+    func countDown() {
+        count -= 1
+        if count <= 0 { release() }
+    }
+    func release() {
+        let onDone = onDone
+        self.onDone = nil
+        onDone?()
+    }
+}
+
+/// Main actor isolated, hence Sendable. Allows passing windows to the task group children
+@MainActor
+private final class HideRequests {
+    let requests: [(MacWindow, OptimalHideCorner)]
+    init(_ requests: [(MacWindow, OptimalHideCorner)]) { self.requests = requests }
 }
 
 @MainActor

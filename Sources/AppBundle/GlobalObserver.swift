@@ -9,6 +9,13 @@ enum GlobalObserver {
             return
         }
         let notifName = notification.name.rawValue
+        nativeFocusEpoch.bump()
+        if notification.name == NSWorkspace.didTerminateApplicationNotification,
+           let pid = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+        {
+            // Synchronously, before any refresh session observes the native focus change caused by the termination
+            MainActor.assumeIsolated { onAppTerminated(pid) }
+        }
         Task.startUnstructured { @MainActor in
             if !TrayMenuModel.shared.isEnabled { return }
             if notifName == NSWorkspace.didActivateApplicationNotification.rawValue {
@@ -20,6 +27,7 @@ enum GlobalObserver {
     }
 
     private static func onHideApp(_ notification: Notification) {
+        nativeFocusEpoch.bump()
         let notifName = notification.name.rawValue
         Task.startUnstructured { @MainActor in
             guard let token: RunSessionGuard = .isServerEnabled else { return }
@@ -54,6 +62,7 @@ enum GlobalObserver {
         nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main, using: onNotif)
 
         NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in
+            nativeFocusEpoch.bump() // Clicks change the focus
             // todo reduce number of refreshSession in the callback
             //  resetManipulatedWithMouseIfPossible might call its own refreshSession
             //  The end of the callback calls refreshSession

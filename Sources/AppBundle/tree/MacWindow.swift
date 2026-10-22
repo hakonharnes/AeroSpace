@@ -4,6 +4,7 @@ import Common
 final class MacWindow: Window {
     let macApp: MacApp
     private var prevUnhiddenProportionalPositionInsideWorkspaceRect: CGPoint?
+    private var sizeWhenHidden: CGSize?
 
     @MainActor
     private init(_ id: UInt32, _ actor: MacApp, lastFloatingSize: CGSize?, parent: NonLeafTreeNodeObject, adaptiveWeight: CGFloat, index: Int) {
@@ -89,6 +90,7 @@ final class MacWindow: Window {
         {
             switch parent.cases {
                 case .tilingContainer, .floatingWindowsContainer, .macosHiddenAppsWindowsContainer, .macosFullscreenWindowsContainer:
+                    armFocusStealGuard(deadWindowWorkspace)
                     let deadWindowFocus = deadWindowWorkspace.toLiveFocus()
                     _ = setFocus(to: deadWindowFocus)
                     // Guard against "Apple Reminders popup" bug: https://github.com/nikitabobko/AeroSpace/issues/201
@@ -124,7 +126,10 @@ final class MacWindow: Window {
         guard let nodeMonitor else { return }
         // Don't accidentally override prevUnhiddenEmulationPosition in case of subsequent `hideInCorner` calls
         if !isHiddenInCorner {
-            guard let windowRect = try await getAxRect(.cancellable) else { return }
+            // Tiling windows are positioned by AeroSpace, no need to ask the app (it's slow for some apps).
+            // The bottom left corner needs the actual size of the window, the requested size might be too small
+            let knownRect = corner == .bottomRightCorner && !isFloating ? lastAppliedLayoutPhysicalRect : nil
+            guard let windowRect = if let knownRect { knownRect } else { try await getAxRect(.cancellable) } else { return }
             // Check for isHiddenInCorner for the second time because of the suspension point above
             if !isHiddenInCorner {
                 let topLeftCorner = windowRect.topLeftCorner
@@ -132,6 +137,7 @@ final class MacWindow: Window {
                 let absolutePoint = topLeftCorner - monitorRect.topLeftCorner
                 prevUnhiddenProportionalPositionInsideWorkspaceRect =
                     CGPoint(x: absolutePoint.x / monitorRect.width, y: absolutePoint.y / monitorRect.height)
+                sizeWhenHidden = knownRect == nil ? windowRect.size : nil
                 if isFloating {
                     lastFloatingSize = windowRect.size
                 }
@@ -140,7 +146,10 @@ final class MacWindow: Window {
         let p: CGPoint
         switch corner {
             case .bottomLeftCorner:
-                guard let s = try await getAxSize(.cancellable) else { fallthrough }
+                // Windows on invisible workspaces don't change their size. Don't ask the app on every refresh session
+                // https://github.com/nikitabobko/AeroSpace/issues/545
+                let size: CGSize? = if let sizeWhenHidden { sizeWhenHidden } else { try await getAxSize(.cancellable) }
+                guard let s = size else { fallthrough }
                 // Zoom will jump off if you do one pixel offset https://github.com/nikitabobko/AeroSpace/issues/527
                 // todo this ad hoc won't be necessary once I implement optimization suggested by Zalim
                 let onePixelOffset = macApp.appId == .zoom ? .zero : CGPoint(x: 1, y: -1)
@@ -180,6 +189,7 @@ final class MacWindow: Window {
         }
 
         self.prevUnhiddenProportionalPositionInsideWorkspaceRect = nil
+        self.sizeWhenHidden = nil
     }
 
     override var isHiddenInCorner: Bool {
