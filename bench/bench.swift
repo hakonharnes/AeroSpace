@@ -165,7 +165,8 @@ for i in 0 ..< args.iterations {
     // BENCH_KEYS="A:18,B:2" switches with a synthetic alt+<keycode> keystroke instead of the CLI (end-to-end latency)
     var keyProcess: Process? = nil
     if let keys = ProcessInfo.processInfo.environment["BENCH_KEYS"],
-       let code = keys.split(separator: ",").map { $0.split(separator: ":") }.first(where: { $0[0] == target }).flatMap({ CGKeyCode($0[1]) }) {
+       let code = keys.split(separator: ",").map { $0.split(separator: ":") }.first(where: { $0[0] == target }).flatMap({ CGKeyCode($0[1]) })
+    {
         let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)!
         let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false)!
         down.flags = .maskAlternate; up.flags = .maskAlternate
