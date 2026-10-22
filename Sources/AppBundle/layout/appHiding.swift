@@ -23,16 +23,18 @@ import Common
 /// Called before laying out visible workspaces. Returns the apps that were unhidden
 @MainActor func unhideAppsOfVisibleWorkspaces() -> Set<MacApp> {
     var unhidden: Set<MacApp> = []
-    for pid in appsHiddenByAeroSpace {
-        guard let app = MacApp.allAppsMap[pid] else { appsHiddenByAeroSpace.remove(pid); continue }
-        if !app.nsApp.isHidden { // The user unhid it in the meantime
-            appsHiddenByAeroSpace.remove(pid)
-            continue
-        }
+    for pid in appsHiddenByAeroSpace where MacApp.allAppsMap[pid] == nil || MacApp.allAppsMap[pid]?.nsApp.isHidden == false {
+        appsHiddenByAeroSpace.remove(pid) // Terminated, or the user unhid it in the meantime
+    }
+    for app in MacApp.allAppsMap.values where app.nsApp.isHidden {
+        // Apps hidden by a previous AeroSpace instance that crashed (and so couldn't unhide them) are hidden by
+        // "nobody". With automatically-unhide-macos-hidden-apps the user wants hidden apps back anyway
+        let hiddenByUs = appsHiddenByAeroSpace.contains(app.pid)
+        if !hiddenByUs && !config.automaticallyUnhideMacosHiddenApps { continue }
         let hasVisibleWindow = MacWindow.allWindows.contains { $0.macApp == app && $0.visualWorkspace?.isVisible == true }
         if hasVisibleWindow {
             app.nsApp.unhide()
-            appsHiddenByAeroSpace.remove(pid)
+            appsHiddenByAeroSpace.remove(app.pid)
             unhidden.insert(app)
         }
     }
