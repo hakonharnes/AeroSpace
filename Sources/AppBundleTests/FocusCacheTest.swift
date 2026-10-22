@@ -108,4 +108,14 @@ final class FocusCacheTest: XCTestCase {
         _ = updateFocusCache(window2)
         assertEquals(focus.workspace, b)
     }
+
+    func testMacosActivatesNextAppBeforeReportingTermination() {
+        let (a, window1, _, window2) = setUpTwoWorkspaces()
+        onAppActivated(1234)
+        onAppActivated(4321) // macOS activates the next app first
+        onAppTerminated(1234) // and only then reports the termination of the previously active app
+        _ = updateFocusCache(window2)
+        assertEquals(focus.workspace, a)
+        assertTrue(focus.windowOrNil === window1)
+    }
 }

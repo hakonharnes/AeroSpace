@@ -122,9 +122,19 @@ private let focusStealGuardDuration: TimeInterval = 1
 }
 
 @MainActor private var lastActivatedAppPid: pid_t? = nil
+@MainActor private var prevActivatedAppPid: pid_t? = nil
+@MainActor private var lastActivationDate: Date = .distantPast
 
 @MainActor func onAppActivated(_ pid: pid_t) {
+    if pid == lastActivatedAppPid { return }
+    prevActivatedAppPid = lastActivatedAppPid
     lastActivatedAppPid = pid
+    lastActivationDate = .now
+}
+
+/// macOS might activate the next app before it reports the termination of the active app
+@MainActor private func wasActiveRightBeforeTermination(_ pid: pid_t) -> Bool {
+    pid == lastActivatedAppPid || pid == prevActivatedAppPid && lastActivationDate.distance(to: .now) < 1
 }
 
 /// macOS activates the next app only after the app is actually terminated, which can happen much later than
@@ -134,7 +144,7 @@ private let focusStealGuardDuration: TimeInterval = 1
 @MainActor func onAppTerminated(_ pid: pid_t) {
     let focusedWorkspace = focus.workspace
     let quitFrom = appsQuitByAeroSpace.removeValue(forKey: pid)
-    if quitFrom == focusedWorkspace.name || pid == lastActivatedAppPid ||
+    if quitFrom == focusedWorkspace.name || wasActiveRightBeforeTermination(pid) ||
         MacWindow.allWindows.contains(where: { $0.app.pid == pid && $0.nodeWorkspace == focusedWorkspace })
     {
         armFocusStealGuard(focusedWorkspace)
@@ -191,6 +201,8 @@ private let nativeFocusRequestSettlePeriod: TimeInterval = 0.3
     focusStealGuard = nil
     appsQuitByAeroSpace = [:]
     lastActivatedAppPid = nil
+    prevActivatedAppPid = nil
+    lastActivationDate = .distantPast
     pendingNativeFocusRequest = nil
     pendingNativeFocusRecheck?.cancel()
     pendingNativeFocusRecheck = nil

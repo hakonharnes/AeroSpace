@@ -76,7 +76,11 @@ func runLightSession<T>(
             let snapshot = NativeFocusSnapshot.current
             let nativeFocused = try await getNativeFocusedWindow(.cancellable)
             if let nativeFocused { try await debugWindowsIfRecording(nativeFocused, .cancellable) }
-            _ = updateFocusCache(nativeFocused, snapshot)
+            // Queries don't garbage collect dead windows. Leave jumps to invisible workspaces to the complete refresh
+            // session that is scheduled by the event that changed the native focus. See updateFocusCache
+            if updateFocusCache(nativeFocused, deferJumpToInvisibleWorkspace: isReadOnly, snapshot) != nil {
+                forgetLastKnownNativeFocusedWindow()
+            }
         }
         let focusBefore = focus.windowOrNil
 
