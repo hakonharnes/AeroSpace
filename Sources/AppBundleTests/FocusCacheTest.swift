@@ -91,4 +91,21 @@ final class FocusCacheTest: XCTestCase {
         assertEquals(focus.workspace, a)
         assertTrue(focus.windowOrNil === window1)
     }
+
+    func testTerminationOfActiveAppDoesntSwitchWorkspace() {
+        let (a, window1, _, window2) = setUpTwoWorkspaces()
+        onAppActivated(1234) // An app without windows on the focused workspace
+        onAppTerminated(1234)
+        _ = updateFocusCache(window2) // macOS activates some other app
+        assertEquals(focus.workspace, a)
+        assertTrue(focus.windowOrNil === window1)
+    }
+
+    func testTerminationOfInactiveAppDoesntArmTheGuard() {
+        let (_, _, b, window2) = setUpTwoWorkspaces()
+        onAppActivated(1234)
+        onAppTerminated(4321)
+        _ = updateFocusCache(window2)
+        assertEquals(focus.workspace, b)
+    }
 }

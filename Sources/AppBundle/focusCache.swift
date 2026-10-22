@@ -121,12 +121,20 @@ private let focusStealGuardDuration: TimeInterval = 1
     appsQuitByAeroSpace[pid] = focus.workspace.name
 }
 
+@MainActor private var lastActivatedAppPid: pid_t? = nil
+
+@MainActor func onAppActivated(_ pid: pid_t) {
+    lastActivatedAppPid = pid
+}
+
 /// macOS activates the next app only after the app is actually terminated, which can happen much later than
-/// AeroSpace asked the app to quit. That's why the guard is armed (again) on termination
+/// AeroSpace asked the app to quit. That's why the guard is armed (again) on termination.
+/// When the active app terminates, macOS activates some other app, even if the terminated app didn't have windows
+/// on the focused workspace
 @MainActor func onAppTerminated(_ pid: pid_t) {
     let focusedWorkspace = focus.workspace
     let quitFrom = appsQuitByAeroSpace.removeValue(forKey: pid)
-    if quitFrom == focusedWorkspace.name ||
+    if quitFrom == focusedWorkspace.name || pid == lastActivatedAppPid ||
         MacWindow.allWindows.contains(where: { $0.app.pid == pid && $0.nodeWorkspace == focusedWorkspace })
     {
         armFocusStealGuard(focusedWorkspace)
@@ -182,6 +190,7 @@ private let nativeFocusRequestSettlePeriod: TimeInterval = 0.3
     syncedNativeFocus = nil
     focusStealGuard = nil
     appsQuitByAeroSpace = [:]
+    lastActivatedAppPid = nil
     pendingNativeFocusRequest = nil
     pendingNativeFocusRecheck?.cancel()
     pendingNativeFocusRecheck = nil

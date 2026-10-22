@@ -10,11 +10,13 @@ enum GlobalObserver {
         }
         let notifName = notification.name.rawValue
         nativeFocusEpoch.bump()
-        if notification.name == NSWorkspace.didTerminateApplicationNotification,
-           let pid = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
-        {
-            // Synchronously, before any refresh session observes the native focus change caused by the termination
-            MainActor.assumeIsolated { onAppTerminated(pid) }
+        if let pid = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier {
+            switch notification.name {
+                // Synchronously, before any refresh session observes the native focus change caused by the termination
+                case NSWorkspace.didTerminateApplicationNotification: MainActor.assumeIsolated { onAppTerminated(pid) }
+                case NSWorkspace.didActivateApplicationNotification: MainActor.assumeIsolated { onAppActivated(pid) }
+                default: break
+            }
         }
         Task.startUnstructured { @MainActor in
             if !TrayMenuModel.shared.isEnabled { return }
