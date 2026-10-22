@@ -62,7 +62,7 @@ extension Set<UInt32> {
     func filterExistingInWindowServer() -> Set<UInt32> {
         if isEmpty { return self }
         // The array must contain raw CGWindowIDs, not boxed numbers
-        var ids = map { unsafe UnsafeRawPointer(bitPattern: UInt($0)) }
+        var ids = unsafe map { unsafe UnsafeRawPointer(bitPattern: UInt($0)) }
         guard let array = unsafe CFArrayCreate(nil, &ids, ids.count, nil),
               let infos = CGWindowListCreateDescriptionFromArray(array) as? [NSDictionary],
               !infos.isEmpty // Something is wrong. Don't kill all the windows

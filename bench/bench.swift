@@ -77,7 +77,8 @@ func bounds(_ ids: [CGWindowID]) -> [CGWindowID: CGRect] {
         guard let id = w[kCGWindowNumber as String] as? CGWindowID,
               let b = w[kCGWindowBounds as String] as? NSDictionary,
               let rect = CGRect(dictionaryRepresentation: b) else { continue }
-        result[id] = rect
+        // Windows parked off-screen might be reported as 1x1 windows in the middle of the display
+        result[id] = (w[kCGWindowIsOnscreen as String] as? Bool) == true ? rect : .null
     }
     return result
 }
@@ -90,6 +91,7 @@ let displays: [CGRect] = {
 }()
 
 func visibleFraction(_ r: CGRect) -> Double {
+    if r.isNull { return 0 }
     let area = r.width * r.height
     if area <= 0 { return 0 }
     return displays.map { $0.intersection(r) }.filter { !$0.isNull }.map { $0.width * $0.height }.reduce(0, +) / area
@@ -189,6 +191,12 @@ for i in 0 ..< args.iterations {
         // How long the screen showed "holes": old windows already gone, new ones not yet in place
         blankTimes.append(max(0, allShownAt - allHiddenAt))
     } else {
+        if timeouts == 0 {
+            let b = bounds(shown + hidden)
+            print("timeout: target=\(target) hiddenOk=\(allHiddenAt != nil) shownOk=\(allShownAt != nil)")
+            for id in shown { print("  shown \(id) actual=\(b[id].map { "\($0)" } ?? "nil") expected=\(expected[id].map { "\($0)" } ?? "nil")") }
+            for id in hidden { print("  hidden \(id) actual=\(b[id].map { "\($0)" } ?? "nil") visible=\(b[id].map(visibleFraction) ?? -1)") }
+        }
         timeouts += 1
     }
     cliTimes.append(cliDone ?? (now() - t0))

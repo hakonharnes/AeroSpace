@@ -20,11 +20,7 @@ enum GlobalObserver {
         }
         Task.startUnstructured { @MainActor in
             if !TrayMenuModel.shared.isEnabled { return }
-            if notifName == NSWorkspace.didActivateApplicationNotification.rawValue {
-                scheduleCancellableCompleteRefreshSession(.globalObserver(notifName), optimisticallyPreLayoutWorkspaces: true)
-            } else {
-                scheduleCancellableCompleteRefreshSession(.globalObserver(notifName))
-            }
+            scheduleCancellableCompleteRefreshSession(.globalObserver(notifName))
         }
     }
 

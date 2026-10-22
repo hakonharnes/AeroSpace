@@ -21,4 +21,10 @@ Metrics:
 - `server cpu`/`apps cpu`: CPU time spent by AeroSpace and by the test apps
 - `cli query`: latency of `aerospace list-workspaces --focused`
 
+`bench/openclose.sh <server> <cli> <label> [iterations]` measures how long it takes until the layout settles after
+a window is opened or closed (`new window first tiled`, `layout settled`), based on the frame changes the test app
+reports itself.
+
 Results are noisy (the slow app answers AX requests at random moments), run the builds you compare interleaved.
+
+Don't run it while Mission Control/App Exposé is open: macOS reports scaled frames for all windows in that mode.

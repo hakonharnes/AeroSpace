@@ -32,7 +32,7 @@ func resetManipulatedWithMouseIfPossible() async throws {
         for workspace in Workspace.all {
             workspace.resetResizeWeightBeforeResizeRecursive()
         }
-        scheduleCancellableCompleteRefreshSession(.resetManipulatedWithMouse, optimisticallyPreLayoutWorkspaces: true)
+        scheduleCancellableCompleteRefreshSession(.resetManipulatedWithMouse)
     }
 }
 

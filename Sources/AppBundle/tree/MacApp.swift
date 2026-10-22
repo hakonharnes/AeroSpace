@@ -277,8 +277,13 @@ final class MacApp: AbstractApp {
         }
     }
 
+    /// - Parameter onAppRefreshed: called as soon as the alive windows of the app are known, without waiting for
+    ///   slower apps
     @MainActor
-    static func refreshAllAndGetAliveWindowIds(frontmostAppBundleId: String?) async throws -> [MacApp: [UInt32]] {
+    static func refreshAllAndGetAliveWindowIds(
+        frontmostAppBundleId: String?,
+        onAppRefreshed: @MainActor (MacApp, [UInt32]) async throws -> () = { _, _ in },
+    ) async throws -> [MacApp: [UInt32]] {
         for (_, app) in MacApp.allAppsMap { // gc dead apps
             try checkCancellation()
             if app.nsApp.isTerminated {
@@ -312,6 +317,7 @@ final class MacApp: AbstractApp {
             for try await (pid, windowIds) in group {
                 if let app = MacApp.allAppsMap[pid] {
                     result[app] = windowIds
+                    try await onAppRefreshed(app, windowIds)
                 }
             }
             return result

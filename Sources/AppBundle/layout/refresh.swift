@@ -7,7 +7,6 @@ private var activeRefreshTask: Task<(), any Error>? = nil
 @MainActor
 func scheduleCancellableCompleteRefreshSession(
     _ event: RefreshSessionEvent,
-    optimisticallyPreLayoutWorkspaces: Bool = false,
 ) {
     activeRefreshTask?.cancel()
     activeRefreshTask = Task.startUnstructured { @MainActor in
@@ -15,7 +14,6 @@ func scheduleCancellableCompleteRefreshSession(
         await runHeavyCompleteRefreshSession(
             event,
             assumeCancellable: true,
-            optimisticallyPreLayoutWorkspaces: optimisticallyPreLayoutWorkspaces,
         )
     }
 }
@@ -25,7 +23,6 @@ func runHeavyCompleteRefreshSession(
     _ event: RefreshSessionEvent,
     assumeCancellable: Bool,
     layoutWorkspaces shouldLayoutWorkspaces: Bool = true,
-    optimisticallyPreLayoutWorkspaces: Bool = false,
 ) async {
     let state = signposter.beginInterval(#function, "event: \(event) axTaskLocalAppThreadToken: \(axTaskLocalAppThreadToken?.idForDebug)")
     defer { signposter.endInterval(#function, state) }
@@ -37,11 +34,16 @@ func runHeavyCompleteRefreshSession(
             if let nativeFocused { try await debugWindowsIfRecording(nativeFocused, .cancellable) }
             let deferredNativeFocus = updateFocusCache(nativeFocused, deferJumpToInvisibleWorkspace: true, snapshot)
 
-            if shouldLayoutWorkspaces && optimisticallyPreLayoutWorkspaces { try await layoutWorkspaces() }
+            // Don't make the user wait for the slowest app before showing the result. The newly focused window is
+            // already registered, and closed windows can be detected without asking the apps. The passes below only
+            // fix what's left (frames that don't change are not re-applied, so extra passes are cheap)
+            garbageCollectWindowsMissingInWindowServer()
+            if shouldLayoutWorkspaces { try await layoutWorkspaces() }
 
             await refreshModel_nonCancellable()
-            try await refresh(deferredNativeFocus: deferredNativeFocus)
+            let treeChanged = try await refresh(deferredNativeFocus: deferredNativeFocus, layoutEagerly: shouldLayoutWorkspaces)
             if deferredNativeFocus != nil { await checkOnFocusChangedCallbacks_nonCancellable() }
+            if shouldLayoutWorkspaces && treeChanged { try await layoutWorkspaces() }
             gcMonitors()
 
             updateTrayText()
@@ -137,11 +139,34 @@ func refreshModel_nonCancellable() async {
 }
 
 @MainActor
-private func refresh(deferredNativeFocus: Window?) async throws {
+private func garbageCollectWindowsMissingInWindowServer() {
+    let windows = MacWindow.allWindows
+    let existing = windows.map(\.windowId).toSet().filterExistingInWindowServer()
+    for window in windows where !existing.contains(window.windowId) {
+        window.garbageCollect(skipClosedWindowsCache: false)
+    }
+}
+
+/// Returns true if windows were garbage collected or registered
+@MainActor
+private func refresh(deferredNativeFocus: Window?, layoutEagerly: Bool) async throws -> Bool {
     // Garbage collect terminated apps and windows before working with all windows
     let mapping: [MacApp: [UInt32]]
+    var treeChanged = false
     do {
-        mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) { app, windowIds in
+            // Closed windows: re-layout as soon as the app answers, don't wait for slower apps
+            let alive = windowIds.toSet().filterExistingInWindowServer()
+            var isAnyWindowClosed = false
+            for window in MacWindow.allWindows where window.macApp == app && !alive.contains(window.windowId) {
+                window.garbageCollect(skipClosedWindowsCache: false)
+                isAnyWindowClosed = true
+            }
+            if isAnyWindowClosed {
+                treeChanged = true
+                if layoutEagerly { try await layoutWorkspaces() }
+            }
+        }
     } catch {
         if deferredNativeFocus != nil { forgetLastKnownNativeFocusedWindow() } // Let the next session retry the sync
         throw error
@@ -151,9 +176,11 @@ private func refresh(deferredNativeFocus: Window?) async throws {
     // windows on other macOS Spaces do exist there). https://github.com/nikitabobko/AeroSpace/issues/1615
     let aliveWindowIds = mapping.values.flatMap(id).toSet().filterExistingInWindowServer()
 
+    let windowsCountBefore = MacWindow.allWindowsMap.count
     for window in MacWindow.allWindows {
         if !aliveWindowIds.contains(window.windowId) {
             window.garbageCollect(skipClosedWindowsCache: false)
+            treeChanged = true
         }
     }
     // Sync the native focus only after dead windows are garbage collected. See updateFocusCache
@@ -166,6 +193,7 @@ private func refresh(deferredNativeFocus: Window?) async throws {
 
     // Garbage collect workspaces after apps, because workspaces contain apps.
     Workspace.garbageCollectUnusedWorkspaces()
+    return treeChanged || MacWindow.allWindowsMap.count != windowsCountBefore || deferredNativeFocus != nil
 }
 
 func refreshObs(_: AXObserver, _: AXUIElement, notif: CFString, _: UnsafeMutableRawPointer?) {
