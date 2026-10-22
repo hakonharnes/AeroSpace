@@ -63,3 +63,18 @@ extension Rect {
 
     func getDimension(_ orientation: Orientation) -> CGFloat { orientation == .h ? width : height }
 }
+
+extension Rect {
+    init(topLeft: CGPoint, size: CGSize) {
+        self.init(topLeftX: topLeft.x, topLeftY: topLeft.y, width: size.width, height: size.height)
+    }
+
+    var area: CGFloat { width * height }
+
+    func intersection(_ other: Rect) -> Rect {
+        let minX = max(self.minX, other.minX)
+        let minY = max(self.minY, other.minY)
+        // Width and height are clamped to 0 if the rects don't intersect
+        return Rect(topLeftX: minX, topLeftY: minY, width: min(maxX, other.maxX) - minX, height: min(maxY, other.maxY) - minY)
+    }
+}

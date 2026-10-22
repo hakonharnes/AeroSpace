@@ -119,3 +119,23 @@ final class FocusCacheTest: XCTestCase {
         assertTrue(focus.windowOrNil === window1)
     }
 }
+
+final class SetFrameOrderTest: XCTestCase {
+    func testExitFullscreenOfTheRightWindowMovesFirst() {
+        let fullscreen = Rect(topLeftX: 0, topLeftY: 0, width: 2000, height: 1000)
+        let rightHalf = Rect(topLeftX: 1000, topLeftY: 0, width: 1000, height: 1000)
+        assertTrue(shouldMoveBeforeResize(fullscreen, rightHalf))
+    }
+
+    func testEnterFullscreenOfTheRightWindowResizesFirst() {
+        let fullscreen = Rect(topLeftX: 0, topLeftY: 0, width: 2000, height: 1000)
+        let rightHalf = Rect(topLeftX: 1000, topLeftY: 0, width: 1000, height: 1000)
+        assertFalse(shouldMoveBeforeResize(rightHalf, fullscreen))
+    }
+
+    func testMoveToAnotherMonitorKeepsTheDefaultOrder() {
+        let left = Rect(topLeftX: 0, topLeftY: 0, width: 1000, height: 1000)
+        let otherMonitor = Rect(topLeftX: 3000, topLeftY: 0, width: 500, height: 500)
+        assertFalse(shouldMoveBeforeResize(left, otherMonitor))
+    }
+}

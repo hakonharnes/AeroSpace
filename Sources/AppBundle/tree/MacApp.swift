@@ -157,9 +157,10 @@ final class MacApp: AbstractApp {
             // requests), and the apps don't need to process no-op frame changes
             guard let sizeToWrite = try appliedFrames.plan(windowId, window, topLeft, size, job) else { return }
             let knownSize = size ?? appliedFrames.knownSize(windowId)
+            let currentRect = appliedFrames.knownRect(windowId)
             appliedFrames.forget(windowId) // The job might be cancelled in the middle
             try disableAnimations(app: axApp.threadGuarded, appliedFrames, job) {
-                try setFrame(window, topLeft, sizeToWrite.size, job)
+                try setFrame(window, topLeft, sizeToWrite.size, current: currentRect, job)
             }
             appliedFrames.remember(windowId, topLeft, size, knownSize: knownSize)
         }
@@ -435,7 +436,17 @@ private func getAxRect(window: AXUIElement, job: RunLoopJob) throws -> Rect? {
     return Rect(topLeftX: topLeftCorner.x, topLeftY: topLeftCorner.y, width: size.width, height: size.height)
 }
 
-private func setFrame(_ window: AXUIElement, _ topLeft: CGPoint?, _ size: CGSize?, _ job: RunLoopJob) throws {
+private func setFrame(_ window: AXUIElement, _ topLeft: CGPoint?, _ size: CGSize?, current: Rect? = nil, _ job: RunLoopJob) throws {
+    // Position and size can't be changed atomically. In between, the window is either at the new position with the
+    // old size, or at the old position with the new size. If the window moves and shrinks at the same time (e.g. the
+    // right window exits fullscreen), setting the size first uncovers the part of the screen that stays covered by
+    // the window anyway, and the desktop flashes there. Move first in such cases
+    if let topLeft, let size, let current, shouldMoveBeforeResize(current, Rect(topLeft: topLeft, size: size)) {
+        window.set(Ax.topLeftCornerAttr, topLeft)
+        try job.checkCancellation()
+        window.set(Ax.sizeAttr, size)
+        return
+    }
     // Set size and then the position. The order is important https://github.com/nikitabobko/AeroSpace/issues/143
     //                                                        https://github.com/nikitabobko/AeroSpace/issues/335
     if let size { window.set(Ax.sizeAttr, size) }
@@ -443,6 +454,16 @@ private func setFrame(_ window: AXUIElement, _ topLeft: CGPoint?, _ size: CGSize
     if let topLeft { window.set(Ax.topLeftCornerAttr, topLeft) } else { return }
     try job.checkCancellation()
     if let size { window.set(Ax.sizeAttr, size) }
+}
+
+/// Returns true if the intermediate frame of "move, then resize" keeps more of the area that is covered by the window
+/// both before and after the change than the intermediate frame of "resize, then move"
+func shouldMoveBeforeResize(_ current: Rect, _ target: Rect) -> Bool {
+    let stillCovered = current.intersection(target)
+    if stillCovered.area <= 0 { return false }
+    let movedFirst = Rect(topLeftX: target.topLeftX, topLeftY: target.topLeftY, width: current.width, height: current.height)
+    let resizedFirst = Rect(topLeftX: current.topLeftX, topLeftY: current.topLeftY, width: target.width, height: target.height)
+    return movedFirst.intersection(stillCovered).area > resizedFirst.intersection(stillCovered).area
 }
 
 // Some undocumented magic
@@ -501,6 +522,13 @@ private final class AppliedFrames {
 
     func forget(_ windowId: UInt32) {
         entries.removeValue(forKey: windowId)
+    }
+
+    /// The frame of the window, if AeroSpace knows it without asking the app
+    func knownRect(_ windowId: UInt32) -> Rect? {
+        guard let entry = entries[windowId], !entry.mightBeChangedExternally,
+              let topLeft = entry.topLeft, let size = entry.size ?? entry.knownSize else { return nil }
+        return Rect(topLeft: topLeft, size: size)
     }
 
     func knownSize(_ windowId: UInt32) -> CGSize? {
