@@ -9,7 +9,8 @@ import Common
 /// takes longer (the app processes it), but it happens after the new workspace is already shown.
 ///
 /// Only apps whose every managed window is on an invisible workspace can be hidden. Apps with windows on several
-/// workspaces keep using the corner.
+/// workspaces keep using the corner. Hiding itself takes the app 20-50ms, moving a window takes a responsive app
+/// 1-3ms, so by default only apps measured to be slow at processing frame changes are hidden.
 
 /// pids hidden by AeroSpace (as opposed to apps hidden by the user with cmd-h)
 @MainActor private var appsHiddenByAeroSpace: Set<pid_t> = []
@@ -46,13 +47,21 @@ import Common
 private let frontmostHideDeferral: TimeInterval = 0.3
 
 /// Hides the apps whose every window is on an invisible workspace. Returns the windows that still need the corner
+/// Apps that take longer than this to process a frame change (3 AX calls) are hidden rather than moved.
+/// Responsive apps process a frame change in 1-3ms; hiding takes any app 20-50ms, so moving wins for them
+private let slowAppFrameChangeMs: Double = 12
+
 @MainActor func hideAppsOfInvisibleWorkspaces(_ invisibleWindows: [MacWindow]) -> [MacWindow] {
-    if !config.hideAppsOnInvisibleWorkspaces { return invisibleWindows }
+    if config.hideAppsOnInvisibleWorkspaces == .never { return invisibleWindows }
     let frontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
     var remaining: [MacWindow] = []
     let byApp = Dictionary(grouping: invisibleWindows, by: { $0.macApp })
     for (app, windows) in byApp {
-        let allInvisible = app.pid != myPid &&
+        let isSlow = (app.frameChangeLatencyMs.value ?? 0) > slowAppFrameChangeMs
+        // An app that is already hidden stays hidden even if it got faster: unhiding it to move its windows would
+        // show them for a moment
+        let shouldHide = config.hideAppsOnInvisibleWorkspaces == .always || isSlow || appsHiddenByAeroSpace.contains(app.pid)
+        let allInvisible = shouldHide && app.pid != myPid &&
             MacWindow.allWindows.filter { $0.macApp == app }.allSatisfy { $0.visualWorkspace?.isVisible == false }
         if !allInvisible {
             remaining += windows

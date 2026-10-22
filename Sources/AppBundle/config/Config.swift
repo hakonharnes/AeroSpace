@@ -45,7 +45,7 @@ struct Config: ConvenienceMutable {
     var autoReloadConfig: Bool = false
     var automaticallyUnhideMacosHiddenApps: Bool = false
     var restoreLayoutOnRestart: Bool = true
-    var hideAppsOnInvisibleWorkspaces: Bool = true
+    var hideAppsOnInvisibleWorkspaces: HideAppsOnInvisibleWorkspaces = .slow
     var accordionPadding: Int = 30
     var enableNormalizationOppositeOrientationForNestedContainers: Bool = true
     var persistentWorkspaces: OrderedSet<String> = []
@@ -82,4 +82,11 @@ enum ConfigVersion: Int, Comparable, CaseIterable, Sendable, CustomStringConvert
 
 enum DefaultContainerOrientation: String {
     case horizontal, vertical, auto
+}
+
+enum HideAppsOnInvisibleWorkspaces: String {
+    case never
+    /// Only apps that are slow at processing AX requests (measured from their own frame changes)
+    case slow
+    case always
 }

@@ -16,6 +16,8 @@ final class MacApp: AbstractApp {
     var lastNativeFocusedWindowId: UInt32? = nil
     private var thread: Thread?
     private var setFrameJobs: [UInt32: RunLoopJob] = [:]
+    /// How long the app takes to process a frame change (3 AX calls). Written from the AX thread, read from main
+    let frameChangeLatencyMs = LatencyEma()
     @MainActor private static var focusJob: RunLoopJob? = nil
 
     /*conforms*/ var name: String? { nsApp.localizedName }
@@ -150,7 +152,7 @@ final class MacApp: AbstractApp {
 
     func setAxFrame(_ windowId: UInt32, _ topLeft: CGPoint?, _ size: CGSize?) {
         setFrameJobs.removeValue(forKey: windowId)?.cancel()
-        setFrameJobs[windowId] = withWindowAsync(windowId, .cancellable) { [axApp] window, job in
+        setFrameJobs[windowId] = withWindowAsync(windowId, .cancellable) { [axApp, frameChangeLatencyMs] window, job in
             let appliedFrames = AppliedFrames.ofCurrentThread
             // Every refresh session re-layouts all the windows. Most of the time, nothing changes.
             // Skipping redundant writes saves AX round trips (that's a lot for apps that are slow at answering AX
@@ -159,9 +161,11 @@ final class MacApp: AbstractApp {
             let knownSize = size ?? appliedFrames.knownSize(windowId)
             let currentRect = appliedFrames.knownRect(windowId)
             appliedFrames.forget(windowId) // The job might be cancelled in the middle
+            let t0 = DispatchTime.now().uptimeNanoseconds
             try disableAnimations(app: axApp.threadGuarded, appliedFrames, job) {
                 try setFrame(window, topLeft, sizeToWrite.size, current: currentRect, job)
             }
+            frameChangeLatencyMs.record(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6)
             appliedFrames.remember(windowId, topLeft, size, knownSize: knownSize)
         }
     }
@@ -597,4 +601,16 @@ func windowIdToRefcon(_ windowId: UInt32) -> UnsafeMutableRawPointer? {
 
 func refconToWindowId(_ refcon: UnsafeMutableRawPointer?) -> UInt32? {
     unsafe refcon.map { UInt32(truncatingIfNeeded: UInt(bitPattern: $0)) }
+}
+
+/// Exponential moving average of a latency, safe to write from one thread and read from another
+final class LatencyEma: Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var _value: Double? = nil
+    var value: Double? { lock.withLock { unsafe _value } }
+    func record(_ sample: Double) {
+        lock.withLock {
+            unsafe _value = unsafe _value.map { $0 * 0.7 + sample * 0.3 } ?? sample
+        }
+    }
 }

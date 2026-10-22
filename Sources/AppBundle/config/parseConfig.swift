@@ -146,7 +146,7 @@ private let configParser: [String: any ParserProtocol<Config>] = [
     "auto-reload-config": Parser(\.autoReloadConfig, parseBool),
     "automatically-unhide-macos-hidden-apps": Parser(\.automaticallyUnhideMacosHiddenApps, parseBool),
     "restore-layout-on-restart": Parser(\.restoreLayoutOnRestart, parseBool),
-    "hide-apps-on-invisible-workspaces": Parser(\.hideAppsOnInvisibleWorkspaces, parseBool),
+    "hide-apps-on-invisible-workspaces": Parser(\.hideAppsOnInvisibleWorkspaces, parseHideAppsOnInvisibleWorkspaces),
     "accordion-padding": Parser(\.accordionPadding, parseInt),
     persistentWorkspacesKey: Parser(\.persistentWorkspaces, parsePersistentWorkspaces),
     "exec-on-workspace-change": Parser(\.execOnWorkspaceChange, parseArrayOfStrings),
@@ -503,4 +503,11 @@ func expectedActualTypeDiagnostic(expected: TomlType, actual: TomlType, _ backtr
 
 func expectedActualTypeDiagnostic(expected: [TomlType], actual: TomlType, _ backtrace: ConfigBacktrace) -> ConfigParseDiagnostic {
     .init(backtrace, expectedActualTypeError(expected: expected, actual: actual))
+}
+
+private func parseHideAppsOnInvisibleWorkspaces(_ raw: OrderedJson, _ backtrace: ConfigBacktrace) -> ResOrConfigParseDiagnostic<HideAppsOnInvisibleWorkspaces> {
+    parseString(raw, backtrace).flatMap {
+        HideAppsOnInvisibleWorkspaces(rawValue: $0)
+            .toResult(.init(backtrace, "Can't parse hide-apps-on-invisible-workspaces '\($0)'. Possible values: never|slow|always"))
+    }
 }

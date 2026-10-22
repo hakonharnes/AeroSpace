@@ -137,8 +137,9 @@ func percentile(_ xs: [Double], _ p: Double) -> Double {
 func fmt(_ x: Double) -> String { String(format: "%.1f", x) }
 
 // ---------- Setup ----------
-let wsA = "BENCH_A"
-let wsB = "BENCH_B"
+// Workspaces to switch between. Override to measure real workspaces (then the app stats are empty)
+let wsA = ProcessInfo.processInfo.environment["BENCH_WS_A"] ?? "BENCH_A"
+let wsB = ProcessInfo.processInfo.environment["BENCH_WS_B"] ?? "BENCH_B"
 let idsA = windowIds(wsA)
 let idsB = windowIds(wsB)
 precondition(!idsA.isEmpty && !idsB.isEmpty, "Populate \(wsA) and \(wsB) first")

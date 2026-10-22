@@ -51,9 +51,13 @@ automatically-unhide-macos-hidden-apps = false
 restore-layout-on-restart = true
 
 # Hide whole apps when all their windows are on invisible workspaces, instead of moving every window to a corner
-# of the screen. Showing a workspace becomes as fast for slow apps (Electron, browsers) as for fast ones:
-# unhiding is handled by macOS, not by the app. Apps with windows on several workspaces keep using the corner
-hide-apps-on-invisible-workspaces = true
+# of the screen. Unhiding is handled by macOS in ~2ms regardless of how busy the app is, but hiding takes the app
+# 20-50ms, so this only pays off for apps that are slow at processing window moves (Electron apps under load,
+# game engines, ...). Possible values:
+#   'slow'   (default) hide only apps measured to be slow at processing AeroSpace's window moves
+#   'always' hide every app whose windows are all on invisible workspaces
+#   'never'  always move windows to the corner
+hide-apps-on-invisible-workspaces = 'slow'
 
 # List of workspaces that should stay alive even when they contain no windows,
 # even when they are invisible.
