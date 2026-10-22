@@ -1,0 +1,15 @@
+# Minimal config used by run-bench.sh
+config-version = 2
+start-at-login = false
+after-startup-command = []
+enable-normalization-flatten-containers = true
+enable-normalization-opposite-orientation-for-nested-containers = true
+default-root-container-layout = 'tiles'
+default-root-container-orientation = 'auto'
+[gaps]
+inner.horizontal = 6
+inner.vertical = 6
+outer.left = 3
+outer.bottom = 3
+outer.right = 3
+outer.top = 3
