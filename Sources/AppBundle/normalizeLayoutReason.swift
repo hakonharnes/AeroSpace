@@ -48,7 +48,7 @@ private func fetchMacosNativeStates(_ windows: [Window]) async throws -> [UInt32
 
 @MainActor
 private func validateStillPopups(_ filter: (Window) -> Bool) async throws {
-    for node in macosPopupWindowsContainer.children where filter(node as! MacWindow) {
+    for node in macosPopupWindowsContainer.children where filter(node as! MacWindow) && (node as! MacWindow).tabGroup == nil {
         let popup = (node as! MacWindow)
         let windowLevel = getWindowLevel(for: popup.windowId)
         if try await popup.isWindowHeuristic(windowLevel, .cancellable) {

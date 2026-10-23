@@ -2,7 +2,8 @@
 //
 // Usage: benchapp --name <name> [--windows <n>] [--slow-ms <ms>] [--quit-on-last-close] [--stats <path>]
 //   SIGUSR1 closes the most recently opened window (app-initiated close, like cmd-w)
-//   SIGUSR2 opens one more window
+//   SIGUSR2 opens one more window. BENCHAPP_TABS=native makes it a native tab of the last window (AppKit tab bar),
+//   BENCHAPP_TABS=stacked opens it at exactly the last window's frame (Ghostty with a hidden title bar)
 //   --slow-ms   Block the main thread for <ms> every 50ms to emulate an app that is slow at answering AX requests
 //   --stats     Periodically dump counters (window moves, resizes, AX writes) as JSON to <path>
 import AppKit
@@ -94,8 +95,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func openWindow() {
         let i = opened
         opened += 1
+        let tabs = ProcessInfo.processInfo.environment["BENCHAPP_TABS"]
+        var rect = NSRect(x: 100 + i * 30, y: 100 + i * 30, width: 500, height: 400)
+        if tabs == "stacked", let last = windows.last { rect = last.frame }
         let w = BenchWindow(
-            contentRect: NSRect(x: 100 + i * 30, y: 100 + i * 30, width: 500, height: 400),
+            contentRect: rect,
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false,
@@ -103,6 +107,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         w.title = "\(args.name)-\(i)"
         w.isReleasedWhenClosed = false
         w.delegate = self
+        if tabs == "native", let last = windows.last {
+            w.tabbingMode = .preferred
+            last.addTabbedWindow(w, ordered: .above)
+        }
+        if tabs == "stacked", let last = windows.last { w.setFrame(last.frame, display: false) } // pixel-identical, like Ghostty
         w.makeKeyAndOrderFront(nil)
         windows.append(w)
         log("open \(w.title) \(w.windowNumber)")

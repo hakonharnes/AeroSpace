@@ -31,7 +31,7 @@ import Common
         // "nobody". With automatically-unhide-macos-hidden-apps the user wants hidden apps back anyway
         let hiddenByUs = appsHiddenByAeroSpace.contains(app.pid)
         if !hiddenByUs && !config.automaticallyUnhideMacosHiddenApps { continue }
-        let hasVisibleWindow = MacWindow.allWindows.contains { $0.macApp == app && $0.visualWorkspace?.isVisible == true }
+        let hasVisibleWindow = MacWindow.allWindows.contains { $0.macApp == app && $0.workspaceForHiding?.isVisible == true }
         if hasVisibleWindow {
             app.nsApp.unhide()
             appsHiddenByAeroSpace.remove(app.pid)
@@ -64,7 +64,7 @@ private let slowAppFrameChangeMs: Double = 12
         // show them for a moment
         let shouldHide = config.hideAppsOnInvisibleWorkspaces == .always || isSlow || appsHiddenByAeroSpace.contains(app.pid)
         let allInvisible = shouldHide && app.pid != myPid &&
-            MacWindow.allWindows.filter { $0.macApp == app }.allSatisfy { $0.visualWorkspace?.isVisible == false }
+            MacWindow.allWindows.filter { $0.macApp == app }.allSatisfy { $0.workspaceForHiding?.isVisible == false }
         if !allInvisible {
             remaining += windows
         } else if app.pid == frontmostPid {
@@ -92,4 +92,9 @@ private let slowAppFrameChangeMs: Double = 12
         MacApp.allAppsMap[pid]?.nsApp.unhide()
     }
     appsHiddenByAeroSpace = []
+}
+
+extension MacWindow {
+    /// Parked tabs follow the workspace of their active tab
+    @MainActor var workspaceForHiding: Workspace? { (tabGroup?.active ?? self).visualWorkspace }
 }

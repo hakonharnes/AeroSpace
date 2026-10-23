@@ -12,6 +12,7 @@ import Common
 ///   windows are garbage collected. By that time, we know whether the focus change was caused by macOS reacting to
 ///   a closed window. https://github.com/nikitabobko/AeroSpace/issues/1097
 @MainActor func updateFocusCache(_ nativeFocused: Window?, deferJumpToInvisibleWorkspace: Bool = false, _ snapshot: NativeFocusSnapshot? = nil) -> Window? {
+    if let nativeFocused { activateTabIfParked(nativeFocused) }
     if nativeFocused?.parent is MacosPopupWindowsContainer {
         return nil
     }

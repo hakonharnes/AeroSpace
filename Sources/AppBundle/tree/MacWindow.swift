@@ -3,6 +3,8 @@ import Common
 
 final class MacWindow: Window {
     let macApp: MacApp
+    /// Set when the window is a native tab (or a stacked window) of other windows. See tabGroups.swift
+    var tabGroup: TabGroup? = nil
     private var prevUnhiddenProportionalPositionInsideWorkspaceRect: CGPoint?
     private var sizeWhenHidden: CGSize?
 
@@ -20,6 +22,14 @@ final class MacWindow: Window {
     static func getOrRegister(windowId: UInt32, macApp: MacApp) async throws -> MacWindow {
         if let existing = allWindowsMap[windowId] { return existing }
         let rect = try await macApp.getAxRect(windowId, .cancellable)
+        // A new native tab appears at exactly the frame of the window it's a tab of. It takes that window's place
+        if let anchor = try await findTabAnchor(for: windowId, app: macApp, rect: rect) {
+            if let existing = allWindowsMap[windowId] { return existing }
+            let window = MacWindow(windowId, macApp, lastFloatingSize: rect?.size, parent: macosPopupWindowsContainer, adaptiveWeight: WEIGHT_DOESNT_MATTER, index: INDEX_BIND_LAST)
+            allWindowsMap[windowId] = window
+            window.joinTabGroup(of: anchor)
+            return window
+        }
         let data = try await unbindAndGetBindingDataForNewWindow(
             windowId,
             macApp,
@@ -82,7 +92,9 @@ final class MacWindow: Window {
             return
         }
         if !skipClosedWindowsCache { cacheClosedWindowIfNeeded() }
-        let parent = unbindFromParent().parent
+        // A dying active tab hands its place in the tree to a sibling
+        let heir = leaveTabGroupOnDeath()
+        guard let parent = heir?.parent ?? unbindFromParentIfBound()?.parent else { return }
         let deadWindowWorkspace = parent.nodeWorkspace
         let focus = focus
         if let deadWindowWorkspace, deadWindowWorkspace == focus.workspace ||
@@ -200,8 +212,12 @@ final class MacWindow: Window {
         try await macApp.getAxSize(windowId, cm)
     }
 
-    override func setAxFrame(_ topLeft: CGPoint?, _ size: CGSize?) {
+    @MainActor override func setAxFrame(_ topLeft: CGPoint?, _ size: CGSize?) {
         macApp.setAxFrame(windowId, topLeft, size)
+        // Tabs share one frame: keep the parked siblings stacked under the active tab (and in the corner with it)
+        for sibling in tabGroup?.siblings ?? [] where sibling !== self {
+            sibling.macApp.setAxFrame(sibling.windowId, topLeft, size)
+        }
     }
 
     override func getAxRect(_ cm: CancellationMode) async throws -> Rect? {

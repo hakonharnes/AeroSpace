@@ -59,6 +59,10 @@ restore-layout-on-restart = true
 #   'never'  always move windows to the corner
 hide-apps-on-invisible-workspaces = 'slow'
 
+# Treat native macOS tabs (Finder, Terminal, Skim, JetBrains, Ghostty, ...) as one window instead of one window per
+# tab. A new window that appears at exactly the frame of an existing window of the same app is a tab of it
+detect-native-tabs = true
+
 # List of workspaces that should stay alive even when they contain no windows,
 # even when they are invisible.
 # This config option is only available since 'config-version = 2'

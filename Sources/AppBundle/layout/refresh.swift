@@ -87,6 +87,7 @@ func runHeavyCompleteRefreshSession(
             updateTrayText()
             SecureInputPanel.shared.refresh()
             try await normalizeLayoutReason(onlyApp: targetApp)
+            try await syncActiveTabs()
             if shouldLayoutWorkspaces { try await layoutWorkspaces() }
             persistLayoutIfNeeded()
         }
