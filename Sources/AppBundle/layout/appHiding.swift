@@ -48,11 +48,11 @@ import Common
 @MainActor private var frontmostHideDeferredSince: (pid: pid_t, since: Date)? = nil
 private let frontmostHideDeferral: TimeInterval = 0.3
 
-/// Hides the apps whose every window is on an invisible workspace. Returns the windows that still need the corner
 /// Apps that take longer than this to process a frame change (3 AX calls) are hidden rather than moved.
 /// Responsive apps process a frame change in 1-3ms; hiding takes any app 20-50ms, so moving wins for them
 private let slowAppFrameChangeMs: Double = 12
 
+/// Hides the apps whose every window is on an invisible workspace. Returns the windows that still need the corner
 @MainActor func hideAppsOfInvisibleWorkspaces(_ invisibleWindows: [MacWindow]) -> [MacWindow] {
     if config.hideAppsOnInvisibleWorkspaces == .never { return invisibleWindows }
     let frontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier

@@ -29,6 +29,18 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.warnings, [])
     }
 
+    func testParseHideAppsOnInvisibleWorkspaces() {
+        assertEquals(parseConfig("config-version = 2").config.hideAppsOnInvisibleWorkspaces, .slow)
+        for (raw, expected) in [("never", HideAppsOnInvisibleWorkspaces.never), ("slow", .slow), ("always", .always)] {
+            let result = parseConfig("config-version = 2\nhide-apps-on-invisible-workspaces = '\(raw)'")
+            assertEquals(result.errors, [])
+            assertEquals(result.config.hideAppsOnInvisibleWorkspaces, expected)
+        }
+        let invalid = parseConfig("config-version = 2\nhide-apps-on-invisible-workspaces = 'sometimes'")
+        assertEquals(invalid.strErrors, ["[ERROR] hide-apps-on-invisible-workspaces: Can't parse hide-apps-on-invisible-workspaces 'sometimes'. Possible values: never|slow|always"])
+        assertEquals(parseConfig("config-version = 2\nrestore-layout-on-restart = false").config.restoreLayoutOnRestart, false)
+    }
+
     func testConfigVersionOutOfBounds() {
         let result = parseConfig(
             """
