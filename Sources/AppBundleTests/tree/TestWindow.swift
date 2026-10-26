@@ -37,6 +37,17 @@ final class TestWindow: Window, CustomStringConvertible {
         _rect
     }
 
+    /// The frame the layout asked for, like the real app would apply it
+    @MainActor override func setAxFrame(_ topLeft: CGPoint?, _ size: CGSize?) {
+        let old = _rect ?? Rect(topLeftX: 0, topLeftY: 0, width: 0, height: 0)
+        _rect = Rect(
+            topLeftX: topLeft?.x ?? old.topLeftX,
+            topLeftY: topLeft?.y ?? old.topLeftY,
+            width: size?.width ?? old.width,
+            height: size?.height ?? old.height,
+        )
+    }
+
     @MainActor override func getAxSize(_ cm: CancellationMode) async throws -> CGSize? {
         _rect.map { CGSize(width: $0.width, height: $0.height) }
     }

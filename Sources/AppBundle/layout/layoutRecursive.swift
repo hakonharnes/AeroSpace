@@ -110,12 +110,20 @@ extension TilingContainer {
         var point = point
         var virtualPoint = virtual.topLeftCorner
 
-        guard let delta = ((orientation == .h ? width : height) - CGFloat(children.sumOfDouble { $0.getWeight(orientation) }))
-            .div(children.count) else { return }
+        if children.isEmpty { return }
+        // Weights are absolute pixels. When the available size changes (another monitor, gaps, a new window), scale
+        // them proportionally. Distributing the difference equally would make small windows negative
+        // (3400 + 400 px moved to a 1728 px display: 400 - 1036 < 0)
+        let available = orientation == .h ? width : height
+        let weights = children.map { max($0.getWeight(orientation), 1) }
+        let sum = CGFloat(weights.sumOfDouble { $0 })
+        let factor = sum > 0 ? available / sum : 1
+        for (child, weight) in zip(children, weights) {
+            child.setWeight(orientation, sum > 0 ? weight * factor : available / CGFloat(children.count))
+        }
 
         let lastIndex = children.indices.last
         for (i, child) in children.enumerated() {
-            child.setWeight(orientation, child.getWeight(orientation) + delta)
             let rawGap = context.resolvedGaps.inner.get(orientation).toDouble()
             // Gaps. Consider 4 cases:
             // 1. Multiple children. Layout first child
