@@ -208,12 +208,11 @@ struct SecureInputView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(details)
                     .font(.body)
-                    .foregroundStyle(.secondary)
             }
+            .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(10)
