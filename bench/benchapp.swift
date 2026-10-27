@@ -7,6 +7,7 @@
 //   --slow-ms   Block the main thread for <ms> every 50ms to emulate an app that is slow at answering AX requests
 //   --stats     Periodically dump counters (window moves, resizes, AX writes) as JSON to <path>
 import AppKit
+import Carbon
 
 nonisolated(unsafe) var axPositionWrites = 0
 nonisolated(unsafe) var axSizeWrites = 0
@@ -30,6 +31,7 @@ struct Args {
     var slowMs = 0
     var quitOnLastClose = false
     var stats: String? = nil
+    var secureInput = false
 }
 
 func parseArgs() -> Args {
@@ -42,6 +44,7 @@ func parseArgs() -> Args {
             case "--slow-ms": args.slowMs = Int(it.next()!)!
             case "--quit-on-last-close": args.quitOnLastClose = true
             case "--stats": args.stats = it.next()!
+            case "--secure-input": args.secureInput = true
             default: fatalError("Unknown arg \(arg)")
         }
     }
@@ -61,6 +64,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             openWindow()
         }
         NSApp.activate(ignoringOtherApps: true)
+        if args.secureInput { EnableSecureEventInput() } // Like a focused password field
         signal(SIGUSR1, SIG_IGN)
         let closeSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         closeSource.setEventHandler { [weak self] in
