@@ -4,8 +4,10 @@ import Common
 import IOKit
 import SwiftUI
 
-private let iconSize = CGSize(width: 50, height: 50)
-private let textSize = CGSize(width: 460, height: 110)
+/// Distance of the badge from the bottom-right corner of the main monitor
+private let badgeMargin: CGFloat = 20
+private let badgeHeight: CGFloat = 36
+private let cardSize = CGSize(width: 460, height: 110)
 
 /// The app that holds Secure Event Input. While it's held, macOS doesn't deliver keyboard events to other apps,
 /// so AeroSpace's key bindings don't work. Only the holder can release it (usually: its password field loses focus)
@@ -40,13 +42,15 @@ struct SecureInputHolder: Equatable {
 
 public final class SecureInputPanel: NSPanelHud {
     @MainActor public static var shared: SecureInputPanel = SecureInputPanel()
-    private var hostingView = NSHostingView(rootView: SecureInputView(holder: nil))
+    private var hostingView = NSHostingView(rootView: SecureInputView(holder: nil, isExpanded: false))
     private var shownHolder: SecureInputHolder? = nil
+    private var isExpanded = false
     private var pollTimer: Timer? = nil
 
     override private init() {
         super.init()
         self.acceptsMouseMovedEvents = true // Hover expands the badge
+        self.contentView?.addSubview(hostingView)
     }
 
     @MainActor
@@ -58,13 +62,8 @@ public final class SecureInputPanel: NSPanelHud {
             let holder = SecureInputHolder.current
             if isVisible && holder == shownHolder { return }
             shownHolder = holder
-            self.contentView?.subviews.removeAll()
-            hostingView = NSHostingView(rootView: SecureInputView(holder: holder))
-            hostingView.frame = NSRect(x: 0, y: 0, width: iconSize.width, height: iconSize.height)
-            self.contentView?.addSubview(hostingView)
-            let x = mainMonitorInfo.width - iconSize.width - 20
-            let panelFrame = NSRect(x: x, y: 20, width: iconSize.width, height: iconSize.width)
-            self.setFrame(panelFrame, display: true)
+            isExpanded = false
+            render()
             self.orderFrontRegardless()
         } else {
             shownHolder = nil
@@ -87,19 +86,35 @@ public final class SecureInputPanel: NSPanelHud {
         }
     }
 
-    public func updateFrame(isMinimized: Bool) {
-        let width = isMinimized ? iconSize.width : textSize.width
-        let height = isMinimized ? iconSize.height : textSize.height
-        hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
-        let x = mainMonitorInfo.width - width - 20
-        let panelFrame = NSRect(x: x, y: 20, width: width, height: height)
-        self.setFrame(panelFrame, display: true)
+    @MainActor
+    fileprivate func setExpanded(_ expanded: Bool) {
+        if isExpanded == expanded { return }
+        isExpanded = expanded
+        render()
+    }
+
+    @MainActor
+    fileprivate func onClick() {
+        guard let holder = shownHolder, !holder.isLoginWindow else { return }
+        jumpToSecureInputHolder(holder)
+    }
+
+    /// The badge grows up and to the left, from the bottom-right corner of the main monitor
+    @MainActor
+    private func render() {
+        hostingView.rootView = SecureInputView(holder: shownHolder, isExpanded: isExpanded)
+        hostingView.layoutSubtreeIfNeeded()
+        let size = hostingView.fittingSize
+        hostingView.frame = NSRect(origin: .zero, size: size)
+        let x = mainMonitorInfo.width - size.width - badgeMargin
+        self.setFrame(NSRect(x: x, y: badgeMargin, width: size.width, height: size.height), display: true)
     }
 }
 
 /// Focus the app that holds Secure Input (switching to its workspace), so the user can finish or cancel the password
 /// prompt that holds it. Clicking again within a few seconds goes to the app's next window, in case the guess was wrong
 @MainActor private var lastSecureInputJump: (pid: pid_t, windowId: UInt32, date: Date)? = nil
+private let secureInputNextWindowPeriod: TimeInterval = 5
 
 @MainActor
 private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
@@ -108,7 +123,7 @@ private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
         let candidates = MacWindow.allWindows.filter { $0.macApp == app && $0.visualWorkspace != nil }
             .sorted { ($0.visualWorkspace?.name ?? "", $0.windowId) < ($1.visualWorkspace?.name ?? "", $1.windowId) }
         let window: MacWindow?
-        if let last = lastSecureInputJump, last.pid == holder.pid, last.date.distance(to: .now) < 5,
+        if let last = lastSecureInputJump, last.pid == holder.pid, last.date.distance(to: .now) < secureInputNextWindowPeriod,
            let index = candidates.firstIndex(where: { $0.windowId == last.windowId }), candidates.count > 1
         {
             window = candidates[(index + 1) % candidates.count] // Repeated click: the next window of the app
@@ -138,12 +153,14 @@ private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
     }
 }
 
+/// A pill in the bottom-right corner: a lock and the icon of the app that holds Secure Input. On hover, it grows to a
+/// card that explains what's going on
 struct SecureInputView: View {
     let holder: SecureInputHolder?
-    @State var isMinimized: Bool = true
+    let isExpanded: Bool
 
     @Environment(\.colorScheme) var colorScheme: ColorScheme
-    private var fontColor: Color {
+    private var cardFontColor: Color {
         colorScheme == .dark ? Color.black : Color.white
     }
 
@@ -154,54 +171,48 @@ struct SecureInputView: View {
         if holder.isLoginWindow {
             return "macOS left **Secure Input** on after unlocking the screen, so AeroSpace can't see your keyboard shortcuts. Lock and unlock the screen (ctrl-cmd-Q) to release it."
         }
-        return "**\(holder.name)** has **Secure Input** on (a password field?), so AeroSpace can't see your keyboard shortcuts. Click to switch to \(holder.name); click again for its next window."
+        return "**\(holder.name)** has **Secure Input** on, so AeroSpace can't see your keyboard shortcuts. Click to switch to \(holder.name); click again for its next window."
     }
 
     var body: some View {
-        ZStack(alignment: .center) {
-            Rectangle()
-                .fill(Color.gray.opacity(isMinimized ? 0.8 : 1.0))
-            if isMinimized {
-                Image(systemName: "lock.shield.fill")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .padding(6)
-                if let icon = holder?.icon {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 24, height: 24)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                        .padding(1)
-                }
-            } else {
-                HStack(spacing: 10) {
-                    if let icon = holder?.icon {
-                        Image(nsImage: icon).resizable().frame(width: 48, height: 48)
-                    }
-                    Text(explanation)
-                        .font(.title3)
-                }
-                .padding(10)
-            }
+        Group {
+            if isExpanded { card } else { pill }
         }
-        .foregroundStyle(fontColor)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .onHover { hovering in
-            isMinimized = !hovering
-            SecureInputPanel.shared.updateFrame(isMinimized: isMinimized)
-        }
-        .onTapGesture {
-            if let holder, !holder.isLoginWindow {
-                jumpToSecureInputHolder(holder)
-            } else {
-                isMinimized.toggle()
-                SecureInputPanel.shared.updateFrame(isMinimized: isMinimized)
-            }
-        }
+        .onHover { SecureInputPanel.shared.setExpanded($0) }
+        .onTapGesture { SecureInputPanel.shared.onClick() }
         .help(holder.map { "Secure Input is held by \($0.name) (pid \($0.pid))" } ?? "Secure Input is on")
-        .frame(
-            width: isMinimized ? iconSize.width : textSize.width,
-            height: isMinimized ? iconSize.height : textSize.height,
-        )
+        .fixedSize()
+    }
+
+    private var pill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.orange)
+            if let icon = holder?.icon {
+                Image(nsImage: icon).resizable().frame(width: 26, height: 26)
+            }
+        }
+        .padding(.horizontal, 11)
+        .frame(height: badgeHeight)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+        .contentShape(Capsule())
+    }
+
+    private var card: some View {
+        HStack(spacing: 10) {
+            if let icon = holder?.icon {
+                Image(nsImage: icon).resizable().frame(width: 48, height: 48)
+            }
+            Text(explanation)
+                .font(.title3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .frame(width: cardSize.width, height: cardSize.height)
+        .foregroundStyle(cardFontColor)
+        .background(Color.gray, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
