@@ -159,7 +159,8 @@ struct SecureInputView: View {
     let holder: SecureInputHolder?
     let isExpanded: Bool
 
-    private let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+    /// Like a macOS notification banner
+    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
 
     private var title: String {
         guard let holder else { return "Secure Input is on" }
@@ -178,8 +179,7 @@ struct SecureInputView: View {
         Group {
             if isExpanded { card } else { pill }
         }
-        .background(.regularMaterial, in: shape)
-        .overlay(shape.strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+        .notificationBackground(shape)
         .contentShape(shape)
         .onHover { SecureInputPanel.shared.setExpanded($0) }
         .onTapGesture { SecureInputPanel.shared.onClick() }
@@ -217,5 +217,18 @@ struct SecureInputView: View {
         }
         .padding(10)
         .frame(width: cardSize.width, height: cardSize.height)
+    }
+}
+
+extension View {
+    /// The material of macOS notification banners: Liquid Glass on macOS 26+, a translucent material before that
+    @ViewBuilder
+    fileprivate func notificationBackground(_ shape: RoundedRectangle) -> some View {
+        if #available(macOS 26, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+        }
     }
 }
