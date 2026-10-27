@@ -6,7 +6,7 @@ import SwiftUI
 
 /// Distance of the badge from the bottom-right corner of the main monitor
 private let badgeMargin: CGFloat = 20
-private let badgeHeight: CGFloat = 36
+private let badgeHeight: CGFloat = 44
 private let cardSize = CGSize(width: 460, height: 110)
 
 /// The app that holds Secure Event Input. While it's held, macOS doesn't deliver keyboard events to other apps,
@@ -159,11 +159,6 @@ struct SecureInputView: View {
     let holder: SecureInputHolder?
     let isExpanded: Bool
 
-    @Environment(\.colorScheme) var colorScheme: ColorScheme
-    private var cardFontColor: Color {
-        colorScheme == .dark ? Color.black : Color.white
-    }
-
     private var explanation: LocalizedStringKey {
         guard let holder else {
             return "AeroSpace cannot respond to keyboard shortcuts while **Secure Input** is active. **Secure Input** is a macOS security feature that prevents applications from reading keyboard events."
@@ -185,15 +180,15 @@ struct SecureInputView: View {
     }
 
     private var pill: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Image(systemName: "lock.fill")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 19, weight: .semibold))
                 .foregroundStyle(.orange)
             if let icon = holder?.icon {
-                Image(nsImage: icon).resizable().frame(width: 26, height: 26)
+                Image(nsImage: icon).resizable().frame(width: 32, height: 32)
             }
         }
-        .padding(.horizontal, 11)
+        .padding(.horizontal, 14)
         .frame(height: badgeHeight)
         .background(.regularMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
@@ -211,8 +206,9 @@ struct SecureInputView: View {
         }
         .padding(10)
         .frame(width: cardSize.width, height: cardSize.height)
-        .foregroundStyle(cardFontColor)
-        .background(Color.gray, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .foregroundStyle(.primary)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
