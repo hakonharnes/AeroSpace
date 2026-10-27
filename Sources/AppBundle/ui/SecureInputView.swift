@@ -98,16 +98,35 @@ public final class SecureInputPanel: NSPanelHud {
 }
 
 /// Focus the app that holds Secure Input (switching to its workspace), so the user can finish or cancel the password
-/// prompt that holds it
+/// prompt that holds it. Clicking again within a few seconds goes to the app's next window, in case the guess was wrong
+@MainActor private var lastSecureInputJump: (pid: pid_t, windowId: UInt32, date: Date)? = nil
+
 @MainActor
 private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
     Task.startUnstructured { @MainActor in
         let app = MacApp.allAppsMap[holder.pid]
-        let window = app.flatMap { app in
-            app.lastNativeFocusedWindowId.flatMap { MacWindow.allWindowsMap[$0] }
-                ?? MacWindow.allWindows.first { $0.macApp == app && $0.visualWorkspace != nil }
+        let candidates = MacWindow.allWindows.filter { $0.macApp == app && $0.visualWorkspace != nil }
+            .sorted { ($0.visualWorkspace?.name ?? "", $0.windowId) < ($1.visualWorkspace?.name ?? "", $1.windowId) }
+        let window: MacWindow?
+        if let last = lastSecureInputJump, last.pid == holder.pid, last.date.distance(to: .now) < 5,
+           let index = candidates.firstIndex(where: { $0.windowId == last.windowId }), candidates.count > 1
+        {
+            window = candidates[(index + 1) % candidates.count] // Repeated click: the next window of the app
+        } else {
+            // 1. The window with a focused password field: exact, if the app exposes it (Dia leaks Secure Input after
+            //    the field loses focus, but the field stays focused in its window)
+            // 2. The app's own focused window. Apps report it even while in the background
+            // 3. What AeroSpace saw focused last in this app (goes stale when the user switches the app's windows
+            //    while another app is frontmost)
+            let withSecureField = try? await app?.getWindowWithFocusedSecureTextField(.nonCancellable)
+            let appFocused = try? await app?.getFocusedWindow(.nonCancellable)
+            window = withSecureField.flatMap { id in candidates.first { $0.windowId == id } }
+                ?? appFocused.flatMap { focused in candidates.first { $0 === focused } }
+                ?? app?.lastNativeFocusedWindowId.flatMap { id in candidates.first { $0.windowId == id } }
+                ?? candidates.first
         }
         if let window, let token = RunSessionGuard.isServerEnabled {
+            lastSecureInputJump = (holder.pid, window.windowId, .now)
             _ = try? await runLightSession(.menuBarButton, token) { window.focusWindow() }
             window.nativeFocus()
         } else {
@@ -134,7 +153,7 @@ struct SecureInputView: View {
         if holder.isLoginWindow {
             return "macOS left **Secure Input** on after unlocking the screen, so AeroSpace can't see your keyboard shortcuts. Lock and unlock the screen (ctrl-cmd-Q) to release it."
         }
-        return "**\(holder.name)** has **Secure Input** on (a password field?), so AeroSpace can't see your keyboard shortcuts. Click to switch to \(holder.name)."
+        return "**\(holder.name)** has **Secure Input** on (a password field?), so AeroSpace can't see your keyboard shortcuts. Click to switch to \(holder.name); click again for its next window."
     }
 
     var body: some View {

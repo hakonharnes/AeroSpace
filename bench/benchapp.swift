@@ -57,6 +57,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var windows: [NSWindow] = []
     var closeSource: (any DispatchSourceSignal)? = nil
     var openSource: (any DispatchSourceSignal)? = nil
+    var keySource: (any DispatchSourceSignal)? = nil
     init(_ args: Args) { self.args = args }
 
     func applicationDidFinishLaunching(_: Notification) {
@@ -76,6 +77,14 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         closeSource.resume()
         self.closeSource = closeSource
+        // SIGHUP makes the first window the app's key window without activating the app
+        signal(SIGHUP, SIG_IGN)
+        let keySource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
+        keySource.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.windows.first?.makeKeyAndOrderFront(nil) }
+        }
+        keySource.resume()
+        self.keySource = keySource
         signal(SIGUSR2, SIG_IGN)
         let openSource = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
         openSource.setEventHandler { [weak self] in

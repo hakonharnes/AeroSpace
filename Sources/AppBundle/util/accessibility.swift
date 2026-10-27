@@ -205,6 +205,14 @@ enum Ax {
         getter: { $0 as? String },
         setter: { $0 as CFTypeRef },
     )
+    static let childrenAttr = ReadableAttrImpl<[AXUIElement]>(
+        key: kAXChildrenAttribute,
+        getter: { ($0 as? [AnyObject])?.map { $0 as! AXUIElement } },
+    )
+    static let focusedAttr = ReadableAttrImpl<Bool>(
+        key: kAXFocusedAttribute,
+        getter: { $0 as? Bool },
+    )
     static let identifierAttr = ReadableAttrImpl<String>(
         key: kAXIdentifierAttribute,
         getter: { $0 as? String },
