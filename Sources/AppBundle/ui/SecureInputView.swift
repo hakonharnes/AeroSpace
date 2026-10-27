@@ -114,11 +114,12 @@ private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
             window = candidates[(index + 1) % candidates.count] // Repeated click: the next window of the app
         } else {
             // 1. The window with a focused password field: exact, if the app exposes it (Dia leaks Secure Input after
-            //    the field loses focus, but the field stays focused in its window)
+            //    the field loses focus, but the field stays focused in its window). Or the only window with a
+            //    password field
             // 2. The app's own focused window. Apps report it even while in the background
             // 3. What AeroSpace saw focused last in this app (goes stale when the user switches the app's windows
             //    while another app is frontmost)
-            let withSecureField = try? await app?.getWindowWithFocusedSecureTextField(.nonCancellable)
+            let withSecureField = try? await app?.getWindowWithSecureTextField(.nonCancellable)
             let appFocused = try? await app?.getFocusedWindow(.nonCancellable)
             window = withSecureField.flatMap { id in candidates.first { $0.windowId == id } }
                 ?? appFocused.flatMap { focused in candidates.first { $0 === focused } }

@@ -32,6 +32,7 @@ struct Args {
     var quitOnLastClose = false
     var stats: String? = nil
     var secureInput = false
+    var passwordField = false
 }
 
 func parseArgs() -> Args {
@@ -45,6 +46,7 @@ func parseArgs() -> Args {
             case "--quit-on-last-close": args.quitOnLastClose = true
             case "--stats": args.stats = it.next()!
             case "--secure-input": args.secureInput = true
+            case "--password-field": args.passwordField = true
             default: fatalError("Unknown arg \(arg)")
         }
     }
@@ -125,6 +127,13 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             last.addTabbedWindow(w, ordered: .above)
         }
         if tabs == "stacked", let last = windows.last { w.setFrame(last.frame, display: false) } // pixel-identical, like Ghostty
+        if args.passwordField && i == 0 { // A focused password field in the first window, like a login form
+            let field = NSSecureTextField(frame: NSRect(x: 20, y: 20, width: 200, height: 24))
+            field.placeholderString = "password"
+            w.contentView?.addSubview(field)
+            w.initialFirstResponder = field
+            w.makeFirstResponder(field)
+        }
         w.makeKeyAndOrderFront(nil)
         windows.append(w)
         log("open \(w.title) \(w.windowNumber)")

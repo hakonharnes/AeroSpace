@@ -129,26 +129,31 @@ final class MacApp: AbstractApp {
         return try await MacWindow.getOrRegister(windowId: windowId, macApp: self)
     }
 
-    /// The window that contains a focused password field (AXSecureTextField). That's the window holding Secure Input.
-    /// Best effort: web content is exposed only by some apps (Chromium-based browsers do), and the search has a budget
-    func getWindowWithFocusedSecureTextField(_ cm: CancellationMode) async throws -> UInt32? {
+    /// The window that holds Secure Input: the one with a focused password field (AXSecureTextField), or, if no field
+    /// reports focus (AppKit reports it only for the key window), the only window that has a password field at all.
+    /// Best effort: web content is exposed only by some apps (WebKit and Chromium do), and the search has a budget
+    func getWindowWithSecureTextField(_ cm: CancellationMode) async throws -> UInt32? {
         guard let thread else { return nil }
         return try await thread.runInLoop(cm) { [windows] job in
             let deadline = DispatchTime.now().uptimeNanoseconds + 300_000_000
+            var windowsWithField: [UInt32] = []
             for (windowId, window) in windows.threadGuarded {
                 var queue: [AXUIElement] = [window.ax]
                 var head = 0
+                var hasField = false
                 while head < queue.count && head < 5000 && DispatchTime.now().uptimeNanoseconds < deadline {
                     try job.checkCancellation()
                     let element = queue[head]
                     head += 1
-                    if element.get(Ax.subroleAttr) == kAXSecureTextFieldSubrole && element.get(Ax.focusedAttr) == true {
-                        return windowId
+                    if element.get(Ax.subroleAttr) == kAXSecureTextFieldSubrole {
+                        if element.get(Ax.focusedAttr) == true { return windowId }
+                        hasField = true
                     }
                     queue += element.get(Ax.childrenAttr) ?? []
                 }
+                if hasField { windowsWithField.append(windowId) }
             }
-            return nil
+            return windowsWithField.count == 1 ? windowsWithField.first : nil
         }
     }
 
