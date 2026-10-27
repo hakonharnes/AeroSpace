@@ -161,21 +161,17 @@ struct SecureInputView: View {
 
     private let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
 
-    private var explanation: LocalizedStringKey {
-        guard let holder else {
-            return "AeroSpace cannot respond to keyboard shortcuts while **Secure Input** is active. **Secure Input** is a macOS security feature that prevents applications from reading keyboard events."
-        }
-        if holder.isLoginWindow {
-            return "macOS left **Secure Input** on after unlocking the screen, so AeroSpace can't see your keyboard shortcuts."
-        }
-        return "**\(holder.name)** has **Secure Input** on, so AeroSpace can't see your keyboard shortcuts."
+    private var title: String {
+        guard let holder else { return "Secure Input is on" }
+        if holder.isLoginWindow { return "macOS left Secure Input on" }
+        return "\(holder.name) has Secure Input on"
     }
 
-    /// What the user can do about it
-    private var hint: LocalizedStringKey? {
-        guard let holder else { return nil }
-        if holder.isLoginWindow { return "Lock and unlock the screen (ctrl-cmd-Q) to release it." }
-        return "Click to switch to \(holder.name); click again for its next window."
+    private var details: String {
+        let cantSee = "AeroSpace can't see your keyboard shortcuts."
+        guard let holder else { return "\(cantSee) Secure Input is a macOS security feature that prevents apps from reading keyboard events." }
+        if holder.isLoginWindow { return "\(cantSee) Lock and unlock the screen (ctrl-cmd-Q) to release it." }
+        return "\(cantSee) Click to switch to \(holder.name). Click again for its next window."
     }
 
     var body: some View {
@@ -210,14 +206,13 @@ struct SecureInputView: View {
                 Image(nsImage: icon).resizable().frame(width: 48, height: 48)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(explanation)
-                    .font(.title3)
+                Text(title)
+                    .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
-                if let hint {
-                    Text(hint)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                }
+                    .lineLimit(1)
+                Text(details)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
