@@ -159,20 +159,32 @@ struct SecureInputView: View {
     let holder: SecureInputHolder?
     let isExpanded: Bool
 
+    private let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
     private var explanation: LocalizedStringKey {
         guard let holder else {
             return "AeroSpace cannot respond to keyboard shortcuts while **Secure Input** is active. **Secure Input** is a macOS security feature that prevents applications from reading keyboard events."
         }
         if holder.isLoginWindow {
-            return "macOS left **Secure Input** on after unlocking the screen, so AeroSpace can't see your keyboard shortcuts. Lock and unlock the screen (ctrl-cmd-Q) to release it."
+            return "macOS left **Secure Input** on after unlocking the screen, so AeroSpace can't see your keyboard shortcuts."
         }
-        return "**\(holder.name)** has **Secure Input** on, so AeroSpace can't see your keyboard shortcuts. Click to switch to \(holder.name); click again for its next window."
+        return "**\(holder.name)** has **Secure Input** on, so AeroSpace can't see your keyboard shortcuts."
+    }
+
+    /// What the user can do about it
+    private var hint: LocalizedStringKey? {
+        guard let holder else { return nil }
+        if holder.isLoginWindow { return "Lock and unlock the screen (ctrl-cmd-Q) to release it." }
+        return "Click to switch to \(holder.name); click again for its next window."
     }
 
     var body: some View {
         Group {
             if isExpanded { card } else { pill }
         }
+        .background(.regularMaterial, in: shape)
+        .overlay(shape.strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
+        .contentShape(shape)
         .onHover { SecureInputPanel.shared.setExpanded($0) }
         .onTapGesture { SecureInputPanel.shared.onClick() }
         .help(holder.map { "Secure Input is held by \($0.name) (pid \($0.pid))" } ?? "Secure Input is on")
@@ -188,11 +200,8 @@ struct SecureInputView: View {
                 Image(nsImage: icon).resizable().frame(width: 32, height: 32)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .frame(height: badgeHeight)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
-        .contentShape(Capsule())
     }
 
     private var card: some View {
@@ -200,15 +209,19 @@ struct SecureInputView: View {
             if let icon = holder?.icon {
                 Image(nsImage: icon).resizable().frame(width: 48, height: 48)
             }
-            Text(explanation)
-                .font(.title3)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(explanation)
+                    .font(.title3)
+                    .foregroundStyle(.primary)
+                if let hint {
+                    Text(hint)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(10)
         .frame(width: cardSize.width, height: cardSize.height)
-        .foregroundStyle(.primary)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5))
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
