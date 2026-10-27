@@ -8,6 +8,10 @@ import SwiftUI
 private let badgeMargin: CGFloat = 20
 private let badgeHeight: CGFloat = 44
 private let cardSize = CGSize(width: 460, height: 110)
+/// Room around the badge for its shadow
+private let shadowMargin: CGFloat = 12
+/// The pill grows to the card and back
+private let transitionDuration: TimeInterval = 0.25
 
 /// The app that holds Secure Event Input. While it's held, macOS doesn't deliver keyboard events to other apps,
 /// so AeroSpace's key bindings don't work. Only the holder can release it (usually: its password field loses focus)
@@ -40,16 +44,30 @@ struct SecureInputHolder: Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.pid == rhs.pid }
 }
 
+/// What the badge shows. The panel changes it, with an animation for the hover transition
+@MainActor
+final class SecureInputBadgeModel: ObservableObject {
+    @Published var holder: SecureInputHolder? = nil
+    @Published var pillSize: CGSize = .zero
+    @Published var isExpanded = false
+}
+
 public final class SecureInputPanel: NSPanelHud {
     @MainActor public static var shared: SecureInputPanel = SecureInputPanel()
-    private var hostingView = NSHostingView(rootView: SecureInputView(holder: nil, isExpanded: false))
+    private let model: SecureInputBadgeModel
+    private let hostingView: NSHostingView<SecureInputView>
     private var shownHolder: SecureInputHolder? = nil
+    /// Whether the window has the card's size. Lags behind the model while the card collapses
     private var isExpanded = false
     private var pollTimer: Timer? = nil
 
+    @MainActor
     override private init() {
+        model = SecureInputBadgeModel()
+        hostingView = NSHostingView(rootView: SecureInputView(model: model))
         super.init()
         self.acceptsMouseMovedEvents = true // Hover expands the badge
+        self.hasShadow = false // The badge draws its own. The window's shadow wouldn't follow the transition
         self.contentView?.addSubview(hostingView)
     }
 
@@ -63,7 +81,10 @@ public final class SecureInputPanel: NSPanelHud {
             if isVisible && holder == shownHolder { return }
             shownHolder = holder
             isExpanded = false
-            render()
+            model.holder = holder
+            model.pillSize = NSHostingView(rootView: SecureInputPill(holder: holder)).fittingSize
+            model.isExpanded = false
+            fitWindow()
             self.orderFrontRegardless()
         } else {
             shownHolder = nil
@@ -86,11 +107,26 @@ public final class SecureInputPanel: NSPanelHud {
         }
     }
 
+    /// The badge animates between the pill and the card within a window of the card's size. The window is only that
+    /// big while the card is shown, so that the pill doesn't take the clicks around it
     @MainActor
     fileprivate func setExpanded(_ expanded: Bool) {
-        if isExpanded == expanded { return }
-        isExpanded = expanded
-        render()
+        if isExpanded == expanded && model.isExpanded == expanded { return }
+        if expanded {
+            isExpanded = true
+            fitWindow()
+        }
+        withAnimation(.smooth(duration: transitionDuration)) { model.isExpanded = expanded }
+        if !expanded {
+            Task.startUnstructured { @MainActor in
+                try? await Task.sleep(for: .seconds(transitionDuration + 0.05))
+                let panel = SecureInputPanel.shared
+                if !panel.model.isExpanded && panel.isExpanded {
+                    panel.isExpanded = false
+                    panel.fitWindow()
+                }
+            }
+        }
     }
 
     @MainActor
@@ -99,15 +135,16 @@ public final class SecureInputPanel: NSPanelHud {
         jumpToSecureInputHolder(holder)
     }
 
-    /// The badge grows up and to the left, from the bottom-right corner of the main monitor
+    /// The badge sits in the bottom-right corner of the main monitor. The SwiftUI view always has the card's size and
+    /// draws the badge in its bottom-right corner; the window shows the part of it that the badge needs
     @MainActor
-    private func render() {
-        hostingView.rootView = SecureInputView(holder: shownHolder, isExpanded: isExpanded)
-        hostingView.layoutSubtreeIfNeeded()
-        let size = hostingView.fittingSize
-        hostingView.frame = NSRect(origin: .zero, size: size)
-        let x = mainMonitorInfo.width - size.width - badgeMargin
-        self.setFrame(NSRect(x: x, y: badgeMargin, width: size.width, height: size.height), display: true)
+    private func fitWindow() {
+        let badge = isExpanded ? cardSize : model.pillSize
+        let full = CGSize(width: cardSize.width + 2 * shadowMargin, height: cardSize.height + 2 * shadowMargin)
+        let size = CGSize(width: badge.width + 2 * shadowMargin, height: badge.height + 2 * shadowMargin)
+        let x = mainMonitorInfo.width - badgeMargin - badge.width - shadowMargin
+        self.setFrame(NSRect(x: x, y: badgeMargin - shadowMargin, width: size.width, height: size.height), display: true)
+        hostingView.frame = NSRect(x: size.width - full.width, y: 0, width: full.width, height: full.height)
     }
 }
 
@@ -153,51 +190,48 @@ private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
     }
 }
 
-/// A pill in the bottom-right corner: a lock and the icon of the app that holds Secure Input. On hover, it grows to a
+/// A pill in the bottom-right corner: a lock and the icon of the app that holds secure input. On hover, it grows to a
 /// card that explains what's going on
 struct SecureInputView: View {
-    let holder: SecureInputHolder?
-    let isExpanded: Bool
-
-    /// Like a macOS notification banner
-    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+    @ObservedObject var model: SecureInputBadgeModel
+    private var holder: SecureInputHolder? { model.holder }
 
     private var title: String {
-        guard let holder else { return "Secure Input is on" }
-        if holder.isLoginWindow { return "macOS left Secure Input on" }
-        return "\(holder.name) has Secure Input on"
+        guard let holder else { return "Secure input is on" }
+        if holder.isLoginWindow { return "macOS left secure input on" }
+        return "\(holder.name) has secure input on"
     }
 
     private var details: String {
         let cantSee = "AeroSpace can't see your keyboard shortcuts."
-        guard let holder else { return "\(cantSee) Secure Input is a macOS security feature that prevents apps from reading keyboard events." }
+        guard let holder else { return "\(cantSee) Secure input is a macOS security feature that prevents apps from reading keyboard events." }
         if holder.isLoginWindow { return "\(cantSee) Lock and unlock the screen (ctrl-cmd-Q) to release it." }
         return "\(cantSee) Click to switch to \(holder.name). Click again for its next window."
     }
 
+    /// Both the pill and the card are always there, in the bottom-right corner of the badge. The transition fades
+    /// one into the other while the badge grows or shrinks, revealing the card from the corner
     var body: some View {
-        Group {
-            if isExpanded { card } else { pill }
+        let expanded = model.isExpanded
+        ZStack(alignment: .bottomTrailing) {
+            card.opacity(expanded ? 1 : 0)
+            SecureInputPill(holder: holder).opacity(expanded ? 0 : 1)
         }
-        .notificationBackground(shape)
-        .contentShape(shape)
+        .frame(
+            width: expanded ? cardSize.width : model.pillSize.width,
+            height: expanded ? cardSize.height : model.pillSize.height,
+            alignment: .bottomTrailing,
+        )
+        .clipShape(badgeShape)
+        .notificationBackground(badgeShape)
+        .compositingGroup()
+        .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
+        .contentShape(badgeShape)
         .onHover { SecureInputPanel.shared.setExpanded($0) }
         .onTapGesture { SecureInputPanel.shared.onClick() }
-        .help(holder.map { "Secure Input is held by \($0.name) (pid \($0.pid))" } ?? "Secure Input is on")
-        .fixedSize()
-    }
-
-    private var pill: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 19, weight: .semibold))
-                .foregroundStyle(.orange)
-            if let icon = holder?.icon {
-                Image(nsImage: icon).resizable().frame(width: 32, height: 32)
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: badgeHeight)
+        .help(holder.map { "Secure input is held by \($0.name) (pid \($0.pid))" } ?? "Secure input is on")
+        .padding(shadowMargin)
+        .frame(width: cardSize.width + 2 * shadowMargin, height: cardSize.height + 2 * shadowMargin, alignment: .bottomTrailing)
     }
 
     private var card: some View {
@@ -217,6 +251,27 @@ struct SecureInputView: View {
         }
         .padding(10)
         .frame(width: cardSize.width, height: cardSize.height)
+    }
+}
+
+/// Like a macOS notification banner
+private let badgeShape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
+struct SecureInputPill: View {
+    let holder: SecureInputHolder?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(.orange)
+            if let icon = holder?.icon {
+                Image(nsImage: icon).resizable().frame(width: 32, height: 32)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: badgeHeight)
+        .fixedSize()
     }
 }
 
