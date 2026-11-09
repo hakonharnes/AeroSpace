@@ -129,6 +129,13 @@ final class MacApp: AbstractApp {
         return try await MacWindow.getOrRegister(windowId: windowId, macApp: self)
     }
 
+    /// The id of the app's focused window. Unlike getFocusedWindow, the window isn't registered
+    func getAxFocusedWindowId(_ cm: CancellationMode) async throws -> UInt32? {
+        try await thread?.runInLoop(cm) { [axApp] job in
+            axApp.threadGuarded.get(Ax.focusedWindowAttr)?.windowId
+        }
+    }
+
     /// The window that holds Secure Input: the one with a focused password field (AXSecureTextField), or, if no field
     /// reports focus (AppKit reports it only for the key window), the only window that has a password field at all.
     /// Best effort: web content is exposed only by some apps (WebKit and Chromium do), and the search has a budget
