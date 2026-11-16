@@ -112,8 +112,15 @@ extension MonitorInfo {
     }
 }
 
-@MainActor func gcMonitors() {
-    if pointToMonitor.count != globalUnsortedMonitorInfos.count {
+@MainActor func gcMonitors(_ infos: [MonitorInfo] = globalUnsortedMonitorInfos) {
+    if pointToMonitor.count != infos.count || infos.contains(where: { pointToMonitor[$0.rect.topLeftCorner] == nil }) {
         rearrangeMonitors()
+        return
+    }
+    // A monitor can be replaced by another one at the same top left corner without changing the monitor count
+    // (e.g. a wide monitor in clamshell mode -> the lid is opened and the monitor is disconnected). The size, the
+    // visible rect (menu bar, Dock) and the name can change too. Monitors are cached by the top left corner, refresh them
+    for info in infos {
+        pointToMonitor[info.rect.topLeftCorner]?._info = info
     }
 }
