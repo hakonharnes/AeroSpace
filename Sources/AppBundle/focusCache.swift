@@ -126,6 +126,35 @@ private let focusStealGuardDuration: TimeInterval = 1
     return focus.workspace.name == g.workspaceName && nativeFocused.isOnInvisibleWorkspace
 }
 
+@MainActor private var forceNativeFocusAfterWindowDeathTask: Task<(), Never>? = nil
+
+/// When a window dies, macOS might leave its app active without windows, so the window that inherits the AeroSpace
+/// focus gets the native focus too. https://github.com/nikitabobko/AeroSpace/issues/65
+/// But the native focus is often still fine: the app has replaced the window with one that AeroSpace hasn't registered
+/// yet (e.g. a "checking for updates" window followed by the result dialog), or another app is active. Forcing the focus
+/// would then activate and raise the heir over that window. Ask the frontmost app first, and force the focus only if it
+/// has no focused window, it still reports the dead one, or macOS jumped to a window on an invisible workspace
+@MainActor func forceNativeFocusIfLostAfterWindowDeath(_ heir: Window, deadWindowId: UInt32) {
+    forceNativeFocusAfterWindowDeathTask?.cancel()
+    forceNativeFocusAfterWindowDeathTask = Task.startUnstructured { @MainActor in
+        let nativeFocusedId: UInt32? = if let frontmost = NSWorkspace.shared.frontmostApplication,
+                                          let app = try? await MacApp.getOrRegister(frontmost)
+        {
+            try? await app.getAxFocusedWindowId(.cancellable)
+        } else {
+            nil
+        }
+        if Task.isCancelled { return }
+        if let nativeFocusedId, nativeFocusedId != deadWindowId,
+           Window.get(byId: nativeFocusedId)?.isOnInvisibleWorkspace != true
+        {
+            return // The native focus is on a live window. The refresh session syncs it
+        }
+        guard focus.windowOrNil == heir else { return } // Something else has moved the focus in the meantime
+        heir.nativeFocus()
+    }
+}
+
 /// pid -> name of the workspace that was focused when AeroSpace asked the app to quit
 @MainActor private var appsQuitByAeroSpace: [pid_t: String] = [:]
 
@@ -218,4 +247,6 @@ private let nativeFocusRequestSettlePeriod: TimeInterval = 0.3
     pendingNativeFocusRequest = nil
     pendingNativeFocusRecheck?.cancel()
     pendingNativeFocusRecheck = nil
+    forceNativeFocusAfterWindowDeathTask?.cancel()
+    forceNativeFocusAfterWindowDeathTask = nil
 }
