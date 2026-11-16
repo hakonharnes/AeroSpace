@@ -55,7 +55,7 @@ final class TabGroup {
 extension MacWindow {
     /// The window of this app that `rect` is a new tab of: a managed window at exactly the same frame. New windows of
     /// an app never appear at a pixel-identical frame to an existing one otherwise, macOS cascades them
-    @MainActor static func findTabAnchor(for windowId: UInt32, app: MacApp, rect: Rect?) async throws -> MacWindow? {
+    @MainActor static func findTabAnchor(for windowId: OpaqueWindowId, app: MacApp, rect: Rect?) async throws -> MacWindow? {
         // At startup, the windows of the previous session are wherever it left them (several of them in the corner,
         // at the same position), and the persisted layout needs every window to go through the regular path
         guard config.detectNativeTabs, !isStartup, let rect, rect.isMostlyOnScreen else { return nil }
@@ -78,7 +78,7 @@ extension MacWindow {
     @MainActor var isConventionalWindow: Bool {
         switch windowParentCases {
             case .tilingContainer, .floatingWindowsContainer: true
-            case .unbound, .macosMinimizedWindowsContainer, .macosHiddenAppsWindowsContainer, .macosFullscreenWindowsContainer, .macosPopupWindowsContainer: false
+            case nil, .macosMinimizedWindowsContainer, .macosHiddenAppsWindowsContainer, .macosFullscreenWindowsContainer, .macosPopupWindowsContainer: false
         }
     }
 
@@ -114,13 +114,13 @@ extension TabGroup {
 
     /// The user selected another tab (cmd-shift-], a click on the tab bar). For AppKit tab bars, the newly selected tab
     /// is the only member on screen; for stacked windows, it's the app's focused window
-    @MainActor func syncActiveTab(frontmostPid: pid_t?, axFocusedWindowId: UInt32?, onScreen: Set<UInt32>) {
+    @MainActor func syncActiveTab(frontmostPid: pid_t?, axFocusedWindowId: OpaqueWindowId?, onScreen: Set<UInt32>) {
         guard let active, members.count > 1 else { return }
         var candidate: MacWindow? = nil
         if active.app.pid == frontmostPid, let axFocusedWindowId, let focused = members.first(where: { $0.windowId == axFocusedWindowId }) {
             candidate = focused
         } else {
-            let visible = members.filter { onScreen.contains($0.windowId) }
+            let visible = members.filter { $0.nativeWindowId.map(onScreen.contains) == true }
             if visible.count == 1 { candidate = visible[0] }
         }
         if let candidate, candidate !== active { activate(candidate) }
@@ -139,7 +139,7 @@ extension TabGroup {
     if groups.isEmpty { return }
     let onScreen = onScreenWindowIds()
     let frontmost = NSWorkspace.shared.frontmostApplication
-    var axFocused: UInt32? = nil
+    var axFocused: OpaqueWindowId? = nil
     if let frontmost, let app = MacApp.allAppsMap[frontmost.processIdentifier], groups.contains(where: { $0.active?.app.pid == app.pid }) {
         axFocused = try await app.getFocusedWindow(.cancellable)?.windowId
     }
@@ -171,7 +171,7 @@ extension Rect {
     @MainActor var isMostlyOnScreen: Bool {
         let area = width * height
         if area <= 0 { return false }
-        let visible = monitorInfos.map { m -> CGFloat in
+        let visible = globalUnsortedMonitorInfos.map { m -> CGFloat in
             let r = m.rect
             let w = max(0, min(maxX, r.maxX) - max(minX, r.minX)), h = max(0, min(maxY, r.maxY) - max(minY, r.minY))
             return w * h

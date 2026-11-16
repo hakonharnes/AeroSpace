@@ -79,10 +79,10 @@ extension NSScreen {
     /// - For ``frame``, (0, 0) is main screen bottom left corner, and positive y-axis goes up (which is crazy).
     ///
     /// The property "normalizes" ``frame``
-    fileprivate var rect: Rect { frame.monitorFrameNormalized() }
+    fileprivate var rect: Rect { frame.withYAxisFlipped }
 
     /// Same as ``rect`` but for ``visibleFrame``
-    fileprivate var visibleRect: Rect { visibleFrame.monitorFrameNormalized() }
+    fileprivate var visibleRect: Rect { visibleFrame.withYAxisFlipped }
 }
 
 private let testMonitorInfoRect = Rect(topLeftX: 0, topLeftY: 0, width: 1920, height: 1080)
@@ -104,12 +104,12 @@ var mainMonitorInfo: MonitorInfo {
     return LazyMonitorInfo(monitorAppKitNsScreenScreensId: screen.index + 1, isMain: true, screen.value)
 }
 
-var monitorInfos: [MonitorInfo] {
+var globalUnsortedMonitorInfos: [MonitorInfo] {
     isUnitTest
         ? [testMonitorInfo]
         : NSScreen.screens.enumerated().map { $0.element.toMonitorInfo(monitorAppKitNsScreenScreensId: $0.offset + 1) }
 }
 
-var sortedMonitorInfos: [MonitorInfo] {
-    monitorInfos.sortedBy([\.rect.minX, \.rect.minY])
+var globalSortedMonitorInfos: [MonitorInfo] {
+    globalUnsortedMonitorInfos.sortedBy([\.rect.minX, \.rect.minY])
 }

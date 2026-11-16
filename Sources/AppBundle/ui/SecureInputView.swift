@@ -150,7 +150,7 @@ public final class SecureInputPanel: NSPanelHud {
 
 /// Focus the app that holds Secure Input (switching to its workspace), so the user can finish or cancel the password
 /// prompt that holds it. Clicking again within a few seconds goes to the app's next window, in case the guess was wrong
-@MainActor private var lastSecureInputJump: (pid: pid_t, windowId: UInt32, date: Date)? = nil
+@MainActor private var lastSecureInputJump: (pid: pid_t, windowId: OpaqueWindowId, date: Date)? = nil
 private let secureInputNextWindowPeriod: TimeInterval = 5
 
 @MainActor
@@ -158,7 +158,7 @@ private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
     Task.startUnstructured { @MainActor in
         let app = MacApp.allAppsMap[holder.pid]
         let candidates = MacWindow.allWindows.filter { $0.macApp == app && $0.visualWorkspace != nil }
-            .sorted { ($0.visualWorkspace?.name ?? "", $0.windowId) < ($1.visualWorkspace?.name ?? "", $1.windowId) }
+            .sorted { ($0.visualWorkspace?.name ?? "", $0.windowId.rawId) < ($1.visualWorkspace?.name ?? "", $1.windowId.rawId) }
         let window: MacWindow?
         if let last = lastSecureInputJump, last.pid == holder.pid, last.date.distance(to: .now) < secureInputNextWindowPeriod,
            let index = candidates.firstIndex(where: { $0.windowId == last.windowId }), candidates.count > 1
@@ -175,7 +175,7 @@ private func jumpToSecureInputHolder(_ holder: SecureInputHolder) {
             let appFocused = try? await app?.getFocusedWindow(.nonCancellable)
             window = withSecureField.flatMap { id in candidates.first { $0.windowId == id } }
                 ?? appFocused.flatMap { focused in candidates.first { $0 === focused } }
-                ?? app?.lastNativeFocusedWindowId.flatMap { id in candidates.first { $0.windowId == id } }
+                ?? app?.lastFocusedNativeWindowOpaqueId.flatMap { id in candidates.first { $0.windowId == id } }
                 ?? candidates.first
         }
         if let window, let token = RunSessionGuard.isServerEnabled {

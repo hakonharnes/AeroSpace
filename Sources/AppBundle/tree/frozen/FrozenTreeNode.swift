@@ -1,12 +1,12 @@
 import AppKit
 import Common
 
-enum FrozenTreeNode: Sendable, Codable {
+enum FrozenTreeNode: Sendable {
     case container(FrozenContainer)
     case window(FrozenWindow)
 }
 
-struct FrozenContainer: Sendable, Codable {
+struct FrozenContainer: Sendable {
     let children: [FrozenTreeNode]
     let layout: Layout
     let orientation: Orientation
@@ -18,6 +18,8 @@ struct FrozenContainer: Sendable, Codable {
                 case .window(let w): .window(FrozenWindow(w))
                 case .tilingContainer(let c): .container(FrozenContainer(c))
                 case .workspace,
+                     .monitor,
+                     .workspacesContainer,
                      .floatingWindowsContainer,
                      .macosMinimizedWindowsContainer,
                      .macosHiddenAppsWindowsContainer,
@@ -32,22 +34,13 @@ struct FrozenContainer: Sendable, Codable {
     }
 }
 
-struct FrozenWindow: Sendable, Codable {
-    let id: UInt32
+struct FrozenWindow: Sendable {
+    let id: OpaqueWindowId
     let weight: CGFloat
-    /// The app that owned the window. A different pid means a different window that reuses the id
-    var pid: pid_t? = nil
 
     @MainActor init(_ window: Window) {
         id = window.windowId
         weight = getWeightOrNil(window) ?? 1
-        pid = window.app.pid
-    }
-
-    /// The live window, if it's still the same window
-    @MainActor var liveWindow: Window? {
-        guard let window = MacWindow.get(byId: id), pid == nil || pid == window.app.pid else { return nil }
-        return window
     }
 }
 

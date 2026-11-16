@@ -26,27 +26,35 @@ if test -z "$identity"; then
 fi
 echo "Codesign identity: $identity"
 
+source ./versions.sh
+export SWIFTPM_MACOS_MIN_DEPLOYMENT_TARGET=$MACOS_MIN_DEPLOYMENT_TARGET
+
 version="$(git describe --tags --abbrev=0 2>/dev/null || echo 0.0.0)-fork"
 out=.release-fork
 rm -rf "$out" && mkdir -p "$out"
 
-restore-generated-files() {
-    git checkout Sources/Common/gitHashGenerated.swift Sources/Common/versionGenerated.swift xcode/AeroSpace.xcodeproj/project.pbxproj
-}
-trap restore-generated-files EXIT
+./generate.sh
 
-./generate.sh --build-version "$version" --codesign-identity "$identity" --generate-git-hash
+# The version and the git hash are embedded into both binaries as a Mach-O section. See Sources/Common/buildInfo.swift
+build_info_file="$PWD/$out/build-info.txt"
+printf '%s\n%s\n%s\n' "$version" "$(git rev-parse HEAD)" "$(git rev-parse --short HEAD)" > "$build_info_file"
+
 (
     cd xcode
-    xcodebuild-pretty "../$out/xcodebuild.log" build \
+    /usr/bin/xcrun xcodebuild build \
         -scheme AeroSpace \
         -destination "generic/platform=macOS" \
         -configuration Release \
-        -derivedDataPath .xcode-build
+        -derivedDataPath .xcode-build \
+        MARKETING_VERSION="$version" \
+        AEROSPACE_CODE_SIGN_IDENTITY="$identity" \
+        AEROSPACE_BUILD_INFO_LDFLAGS="-sectcreate __TEXT __aero_build $build_info_file" > "../$out/xcodebuild.log" 2>&1 ||
+        { tail -50 "../$out/xcodebuild.log"; echo "xcodebuild failed. See $out/xcodebuild.log" > /dev/stderr; exit 1; }
 )
-swift build -c release --product aerospace
+swift_build_cli=(build -c release --product aerospace)
+swift "${swift_build_cli[@]}" -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __aero_build -Xlinker "$build_info_file"
 cp -R xcode/.xcode-build/Build/Products/Release/AeroSpace.app "$out/"
-cp "$(swift build -c release --product aerospace --show-bin-path)/aerospace" "$out/"
+cp "$(swift "${swift_build_cli[@]}" --show-bin-path)/aerospace" "$out/"
 codesign -f -s "$identity" "$out/aerospace"
 
 app=/Applications/AeroSpace.app

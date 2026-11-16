@@ -43,7 +43,7 @@ private struct AppServerTerminationHandler: TerminationHandler {
             let monitor = window.macApp.getAxRectForTermination(window.windowId)?.center.monitorApproximation ?? mainMonitorInfo
             let monitorVisibleRect = monitor.visibleRect
             let windowSize = window.lastFloatingSize ?? CGSize(width: monitorVisibleRect.width, height: monitorVisibleRect.height)
-            let point = CGPoint(
+            let point = Point(
                 x: (monitorVisibleRect.width - windowSize.width) / 2,
                 y: (monitorVisibleRect.height - windowSize.height) / 2,
             )
@@ -76,47 +76,38 @@ extension String {
     }
 }
 
-func - (a: CGPoint, b: CGPoint) -> CGPoint {
-    CGPoint(x: a.x - b.x, y: a.y - b.y)
+func - (a: Point, b: Point) -> Point {
+    Point(x: a.x - b.x, y: a.y - b.y)
 }
 
-func + (a: CGPoint, b: CGPoint) -> CGPoint {
-    CGPoint(x: a.x + b.x, y: a.y + b.y)
+func + (a: Point, b: Point) -> Point {
+    Point(x: a.x + b.x, y: a.y + b.y)
 }
 
-extension CGPoint: ConvenienceMutable {}
-
-extension CGPoint {
+extension Point {
     func distance(toOuterFrame rect: Rect) -> CGFloat {
         // Subtract 1 from maxX/maxY because the right/bottom bounds are
         // exclusive.
         let dx = max(rect.minX - x, 0, x - (rect.maxX - 1))
         let dy = max(rect.minY - y, 0, y - (rect.maxY - 1))
-        return CGPoint(x: dx, y: dy).vectorLength
+        return Point(x: dx, y: dy).vectorLength
     }
 
-    func coerce(in rect: Rect) -> CGPoint? {
+    func coerce(in rect: Rect) -> Point? {
         guard let xRange = rect.minX.until(incl: rect.maxX - 1) else { return nil }
         guard let yRange = rect.minY.until(incl: rect.maxY - 1) else { return nil }
-        return CGPoint(x: x.coerce(in: xRange), y: y.coerce(in: yRange))
+        return Point(x: x.coerce(in: xRange), y: y.coerce(in: yRange))
     }
 
-    func addingXOffset(_ offset: CGFloat) -> CGPoint { CGPoint(x: x + offset, y: y) }
-    func addingYOffset(_ offset: CGFloat) -> CGPoint { CGPoint(x: x, y: y + offset) }
-    func addingOffset(_ orientation: Orientation, _ offset: CGFloat) -> CGPoint { orientation == .h ? addingXOffset(offset) : addingYOffset(offset) }
+    func addingXOffset(_ offset: CGFloat) -> Point { Point(x: x + offset, y: y) }
+    func addingYOffset(_ offset: CGFloat) -> Point { Point(x: x, y: y + offset) }
+    func addingOffset(_ orientation: Orientation, _ offset: CGFloat) -> Point { orientation == .h ? addingXOffset(offset) : addingYOffset(offset) }
 
     func getProjection(_ orientation: Orientation) -> Double { orientation == .h ? x : y }
 
     var vectorLength: CGFloat { sqrt(x * x + y * y) }
 
-    var monitorApproximation: MonitorInfo { monitorInfos.minByOrDie { distance(toOuterFrame: $0.rect) } }
-
-    var withYAxisFlipped: CGPoint {
-        consuming get {
-            self.y = mainMonitorInfo.height - self.y
-            return self
-        }
-    }
+    var monitorApproximation: MonitorInfo { globalUnsortedMonitorInfos.minByOrDie { distance(toOuterFrame: $0.rect) } }
 }
 
 extension CGFloat {
@@ -130,13 +121,6 @@ extension CGFloat {
             case self < range.lowerBound: range.lowerBound
             default: self
         }
-    }
-}
-
-extension CGPoint: @retroactive Hashable { // todo migrate to self written Point
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(x)
-        hasher.combine(y)
     }
 }
 

@@ -7,8 +7,8 @@ struct FocusMonitorCommand: Command {
 
     func run(_ env: CmdEnv, _ io: CmdIo) -> BinaryExitCode {
         guard let target = args.resolveTargetOrReportError(env, io) else { return .fail }
-        return switch args.target.val.resolve(target.workspace.workspaceMonitor, wrapAround: args.wrapAround) {
-            case .success(let targetMonitor): .from(bool: targetMonitor.activeWorkspace.focusWorkspace())
+        return switch args.target.val.resolve(target.workspace.workspaceMonitorInfo, wrapAround: args.wrapAround) {
+            case .success(let targetMonitor): .from(bool: targetMonitor.visibleWorkspace.focusWorkspace())
             case .failure(let msg): .fail(io.err(msg))
         }
     }
@@ -27,7 +27,7 @@ extension MonitorTarget {
                 }
                 return .success(targetMonitor)
             case .relative(let nextPrev):
-                let monitors = sortedMonitorInfos
+                let monitors = globalSortedMonitorInfos
                 guard let curIndex = monitors.firstIndex(where: { $0.rect.topLeftCorner == currentMonitor.rect.topLeftCorner }) else {
                     return .failure("Can't find current monitor")
                 }
@@ -38,8 +38,8 @@ extension MonitorTarget {
                 }
                 return .success(targetMonitor)
             case .patterns(let patterns):
-                let monitors = sortedMonitorInfos
-                guard let targetMonitor = patterns.lazy.compactMap({ $0.resolveMonitor(sortedMonitors: monitors) }).first else {
+                let monitors = globalSortedMonitorInfos
+                guard let targetMonitor = patterns.lazy.compactMap({ $0.resolveMonitorInfo(sortedMonitors: monitors) }).first else {
                     return .failure("None of the monitors match the pattern(s)")
                 }
                 return .success(targetMonitor)
@@ -56,7 +56,7 @@ extension MonitorInfo {
 
     func findRelativeMonitor(inDirection direction: CardinalDirection) -> (monitorsInDirection: [MonitorInfo], index: Int)? {
         let currentMonitor = self
-        let monitors = sortedMonitorInfos.filter {
+        let monitors = globalSortedMonitorInfos.filter {
             currentMonitor.rect.topLeftCorner == $0.rect.topLeftCorner ||
                 $0.relation(to: currentMonitor) == direction.orientation
         }

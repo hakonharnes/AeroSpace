@@ -69,7 +69,7 @@ private let slowAppFrameChangeMs: Double = 12
             remaining += windows
         } else if app.pid == frontmostPid {
             // Another app is about to become frontmost (the focused window belongs to it): wait for that
-            let anotherAppGetsFocus = focus.windowOrNil.map { $0.app.pid != app.pid } ?? false
+            let anotherAppGetsFocus = globalFocus.windowOrNil.map { $0.app.pid != app.pid } ?? false
             if let d = frontmostHideDeferredSince, d.pid == app.pid, d.since.distance(to: .now) > frontmostHideDeferral {
                 remaining += windows // Took too long, give up on hiding for now
             } else if anotherAppGetsFocus {

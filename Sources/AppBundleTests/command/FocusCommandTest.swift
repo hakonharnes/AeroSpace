@@ -1,6 +1,6 @@
 @testable import AppBundle
 import Common
-import XCTest
+import Testing
 
 // todo write tests
 //
@@ -20,18 +20,19 @@ import XCTest
 // expected: mru(window3, window4) is focused
 
 @MainActor
-final class FocusCommandTest: XCTestCase {
-    override func setUp() async throws { setUpWorkspacesForTests() }
+@Suite(.serializedGlobally)
+struct FocusCommandTest {
+    init() { setUpWorkspacesForTests() }
 
-    func testParse() {
-        XCTAssertTrue(parseCommand("focus --boundaries left").errorOrNil?.contains("Possible values") == true)
+    @Test func testParse() {
+        #expect(parseCommand("focus --boundaries left").errorOrNil?.contains("Possible values") == true)
         var expected = FocusCmdArgs(rawArgs: [], cardinalOrDfsDirection: .direction(.left))
         expected.rawBoundaries = .workspace
         testParseSingleCommandSucc("focus --boundaries workspace left", expected)
 
         assertEquals(
             parseCommand("focus --boundaries workspace --boundaries workspace left").errorOrNil,
-            "ERROR: Duplicated option '--boundaries'",
+            "ERROR: Duplicated flag '--boundaries'",
         )
         assertEquals(
             parseCommand("focus --window-id 42 --ignore-floating").errorOrNil,
@@ -48,7 +49,7 @@ final class FocusCommandTest: XCTestCase {
         )
         assertEquals(
             parseCommand("focus left --boundaries-action wrap-around-the-workspace --wrap-around").errorOrNil,
-            "ERROR: Conflicting options: --boundaries-action, --wrap-around",
+            "ERROR: Conflicting flags: --boundaries-action, --wrap-around",
         )
         assertEquals(
             parseCommand("focus dfs-next --fail-if-fullscreen").errorOrNil,
@@ -61,7 +62,7 @@ final class FocusCommandTest: XCTestCase {
         assertNil(parseCommand("focus --fail-if-fullscreen --fail-if-macos-native-fullscreen left").errorOrNil)
     }
 
-    func testFailIfFullscreen() async {
+    @Test func testFailIfFullscreen() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             let window = TestWindow.new(id: 1, parent: $0)
             assertEquals(window.focusWindow(), true)
@@ -71,10 +72,10 @@ final class FocusCommandTest: XCTestCase {
 
         let result = await parseCommand("focus --fail-if-fullscreen right").cmdOrDie.run(.defaultEnv, .emptyStdin)
         assertEquals(result.exitCode.rawValue, 2)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
     }
 
-    func testFailIfMacosNativeFullscreen() async {
+    @Test func testFailIfMacosNativeFullscreen() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             let window = TestWindow.new(id: 1, parent: $0)
             assertEquals(window.focusWindow(), true)
@@ -85,10 +86,10 @@ final class FocusCommandTest: XCTestCase {
 
         let result = await parseCommand("focus --fail-if-macos-native-fullscreen right").cmdOrDie.run(.defaultEnv, .emptyStdin)
         assertEquals(result.exitCode.rawValue, 2)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
     }
 
-    func testFailIfFullscreenAllowsRegularWindows() async {
+    @Test func testFailIfFullscreenAllowsRegularWindows() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             assertEquals(TestWindow.new(id: 1, parent: $0).focusWindow(), true)
             TestWindow.new(id: 2, parent: $0)
@@ -96,80 +97,80 @@ final class FocusCommandTest: XCTestCase {
 
         let result = await parseCommand("focus --fail-if-fullscreen --fail-if-macos-native-fullscreen right").cmdOrDie.run(.defaultEnv, .emptyStdin)
         assertEquals(result.exitCode.rawValue, 0)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
     }
 
-    func testFocus() {
-        assertEquals(focus.windowOrNil, nil)
+    @Test func testFocus() {
+        assertEquals(globalFocus.windowOrNil, nil)
         Workspace.get(byName: name).rootTilingContainer.apply {
             TestWindow.new(id: 1, parent: $0)
             assertEquals(TestWindow.new(id: 2, parent: $0).focusWindow(), true)
             TestWindow.new(id: 3, parent: $0)
         }
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
     }
 
-    func testFocusOverFloatingWindows() async {
-        assertEquals(focus.windowOrNil, nil)
+    @Test func testFocusOverFloatingWindows() async {
+        assertEquals(globalFocus.windowOrNil, nil)
         Workspace.get(byName: name).floatingWindowsContainer.apply {
             TestWindow.new(id: 1, parent: $0, rect: Rect(topLeftX: 0, topLeftY: 0, width: 100, height: 100))
             assertEquals(TestWindow.new(id: 2, parent: $0, rect: Rect(topLeftX: 10, topLeftY: 10, width: 100, height: 100)).focusWindow(), true)
             TestWindow.new(id: 3, parent: $0, rect: Rect(topLeftX: 20, topLeftY: 20, width: 100, height: 100))
         }
 
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
         await parseCommand("focus right").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 3)
+        assertEquals(globalFocus.windowOrNil?.windowId, 3)
     }
 
-    func testFocusAlongTheContainerOrientation() async {
+    @Test func testFocusAlongTheContainerOrientation() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             assertEquals(TestWindow.new(id: 1, parent: $0).focusWindow(), true)
             TestWindow.new(id: 2, parent: $0)
         }
 
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
         await parseCommand("focus right").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
     }
 
-    func testFocusAcrossTheContainerOrientation() async {
+    @Test func testFocusAcrossTheContainerOrientation() async {
         Workspace.get(byName: name).apply {
             TestWindow.new(id: 1, parent: $0.rootTilingContainer)
             TestWindow.new(id: 2, parent: $0.rootTilingContainer)
             assertEquals($0.focusWorkspace(), true)
         }
 
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
         await parseCommand("focus up").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
         await parseCommand("focus down").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
     }
 
-    func testFocusNoWrapping() async {
+    @Test func testFocusNoWrapping() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             assertEquals(TestWindow.new(id: 1, parent: $0).focusWindow(), true)
             TestWindow.new(id: 2, parent: $0)
         }
 
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
         await parseCommand("focus left").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
     }
 
-    func testFocusWrapping() async {
+    @Test func testFocusWrapping() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             assertEquals(TestWindow.new(id: 1, parent: $0).focusWindow(), true)
             TestWindow.new(id: 2, parent: $0)
         }
 
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
         await parseCommand("focus --boundaries workspace --boundaries-action wrap-around-the-workspace left").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
     }
 
-    func testFocusFindMruLeaf() async {
+    @Test func testFocusFindMruLeaf() async {
         let workspace = Workspace.get(byName: name)
         var startWindow: Window!
         var window2: Window!
@@ -189,21 +190,21 @@ final class FocusCommandTest: XCTestCase {
         assertEquals(workspace.mostRecentWindowRecursive?.windowId, 3) // The latest bound
         _ = startWindow.focusWindow()
         await parseCommand("focus right").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 3)
+        assertEquals(globalFocus.windowOrNil?.windowId, 3)
 
         window2.markAsMostRecentChild()
         _ = startWindow.focusWindow()
         await parseCommand("focus right").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
 
         window3.markAsMostRecentChild()
         unrelatedWindow.markAsMostRecentChild()
         _ = startWindow.focusWindow()
         await parseCommand("focus right").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
     }
 
-    func testFocusOutsideOfTheContainer() async {
+    @Test func testFocusOutsideOfTheContainer() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             TestWindow.new(id: 1, parent: $0)
             TilingContainer.newVTiles(parent: $0, adaptiveWeight: 1).apply {
@@ -212,10 +213,10 @@ final class FocusCommandTest: XCTestCase {
         }
 
         await parseCommand("focus left").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
     }
 
-    func testFocusOutsideOfTheContainer2() async {
+    @Test func testFocusOutsideOfTheContainer2() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             TestWindow.new(id: 1, parent: $0)
             TilingContainer.newHTiles(parent: $0, adaptiveWeight: 1).apply {
@@ -224,10 +225,10 @@ final class FocusCommandTest: XCTestCase {
         }
 
         await parseCommand("focus left").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
     }
 
-    func testFocusDfsRelative() async {
+    @Test func testFocusDfsRelative() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             TilingContainer.newVTiles(parent: $0, adaptiveWeight: 1).apply {
                 assertEquals(TestWindow.new(id: 1, parent: $0).focusWindow(), true)
@@ -239,47 +240,110 @@ final class FocusCommandTest: XCTestCase {
             TestWindow.new(id: 4, parent: $0)
         }
 
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
 
         await parseCommand("focus dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
         await parseCommand("focus dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 3)
+        assertEquals(globalFocus.windowOrNil?.windowId, 3)
         await parseCommand("focus dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 4)
+        assertEquals(globalFocus.windowOrNil?.windowId, 4)
 
         await parseCommand("focus dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 3)
+        assertEquals(globalFocus.windowOrNil?.windowId, 3)
         await parseCommand("focus dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
         await parseCommand("focus dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
     }
 
-    func testFocusDfsRelativeWrapping() async {
+    @Test func testFocusSkipsTombstones() async {
+        Workspace.get(byName: name).rootTilingContainer.apply {
+            assertEquals(TestWindow.new(id: 1, parent: $0).focusWindow(), true)
+            TestWindow.new(id: 2, parent: $0).lifeStatus = .dead
+            TilingContainer.newVTiles(parent: $0, adaptiveWeight: 1).apply {
+                TestWindow.new(id: 3, parent: $0).lifeStatus = .invisible
+                $0.lifeStatus = .deadOrInvisible
+            }
+            TilingContainer.newVTiles(parent: $0, adaptiveWeight: 1).apply {
+                TestWindow.new(id: 4, parent: $0).lifeStatus = .invisible
+                TestWindow.new(id: 5, parent: $0)
+                TestWindow.new(id: 6, parent: $0).lifeStatus = .dead
+            }
+            TestWindow.new(id: 7, parent: $0)
+        }
+
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
+
+        // Directional
+        await parseCommand("focus right").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 5)
+        await parseCommand("focus down").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 5)
+        await parseCommand("focus up").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 5)
+        await parseCommand("focus right").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 7)
+        await parseCommand("focus left").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 5)
+        await parseCommand("focus left").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
+        await parseCommand("focus --boundaries-action wrap-around-the-workspace left").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 7)
+        await parseCommand("focus --boundaries-action wrap-around-the-workspace right").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
+
+        // DFS relative
+        await parseCommand("focus dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 5)
+        await parseCommand("focus dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 7)
+        await parseCommand("focus --boundaries-action wrap-around-the-workspace dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
+        await parseCommand("focus --boundaries-action wrap-around-the-workspace dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 7)
+        await parseCommand("focus dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 5)
+
+        // DFS index
+        await parseCommand("focus --dfs-index 0").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
+        await parseCommand("focus --dfs-index 1").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 5)
+        await parseCommand("focus --dfs-index 2").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 7)
+        assertEquals(await parseCommand("focus --dfs-index 3").cmdOrDie.run(.defaultEnv, .emptyStdin).exitCode.rawValue, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 7)
+
+        // --window-id still focuses tombstones
+        await parseCommand("focus --window-id 2").cmdOrDie.run(.defaultEnv, .emptyStdin)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
+    }
+
+    @Test func testFocusDfsRelativeWrapping() async {
         Workspace.get(byName: name).rootTilingContainer.apply {
             assertEquals(TestWindow.new(id: 1, parent: $0).focusWindow(), true)
             TestWindow.new(id: 2, parent: $0)
         }
 
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
 
         assertEquals(await parseCommand("focus --boundaries-action stop dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin).exitCode.rawValue, 0)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
 
         assertEquals(await parseCommand("focus --boundaries-action fail dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin).exitCode.rawValue, 2)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
 
         assertEquals(await parseCommand("focus --boundaries-action wrap-around-the-workspace dfs-prev").cmdOrDie.run(.defaultEnv, .emptyStdin).exitCode.rawValue, 0)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
 
         assertEquals(await parseCommand("focus --boundaries-action stop dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin).exitCode.rawValue, 0)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
 
         assertEquals(await parseCommand("focus --boundaries-action fail dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin).exitCode.rawValue, 2)
-        assertEquals(focus.windowOrNil?.windowId, 2)
+        assertEquals(globalFocus.windowOrNil?.windowId, 2)
 
         assertEquals(await parseCommand("focus --boundaries-action wrap-around-the-workspace dfs-next").cmdOrDie.run(.defaultEnv, .emptyStdin).exitCode.rawValue, 0)
-        assertEquals(focus.windowOrNil?.windowId, 1)
+        assertEquals(globalFocus.windowOrNil?.windowId, 1)
     }
 }

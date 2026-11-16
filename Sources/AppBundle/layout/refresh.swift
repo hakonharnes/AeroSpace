@@ -113,7 +113,7 @@ func runLightSession<T>(
         activeRefreshTask = nil
     }
     return try await $refreshSessionEvent.withValue(event) {
-        let focusBeforeSync = focus
+        let focusBeforeSync = globalFocus
         if !isNativeFocusKnownToBeInSync() {
             let snapshot = NativeFocusSnapshot.current
             let nativeFocused = try await getNativeFocusedWindow(.cancellable)
@@ -124,20 +124,20 @@ func runLightSession<T>(
                 forgetLastKnownNativeFocusedWindow()
             }
         }
-        let focusBefore = focus.windowOrNil
+        let focusBefore = globalFocus.windowOrNil
 
         await refreshModel_nonCancellable()
         let result = try await body()
         await refreshModel_nonCancellable()
 
-        let focusAfter = focus.windowOrNil
+        let focusAfter = globalFocus.windowOrNil
 
         updateTrayText()
         SecureInputPanel.shared.refresh()
         // Queries (list-windows, list-workspaces, etc.) don't change anything. Status bars call them a lot,
         // don't re-layout all the windows and don't trigger a complete refresh session on every call
         // https://github.com/nikitabobko/AeroSpace/issues/104
-        if isReadOnly && focus == focusBeforeSync { return result }
+        if isReadOnly && globalFocus == focusBeforeSync { return result }
         if !event.isFocusFollowsMouse { try await layoutWorkspaces() }
         if focusBefore != focusAfter {
             focusAfter?.nativeFocus() // syncFocusToMacOs
@@ -148,24 +148,19 @@ func runLightSession<T>(
     }
 }
 
-struct RunSessionGuard: Sendable {
+enum RunSessionGuard: Sendable {
+    case forceRun
+
     @MainActor
-    static var isServerEnabled: RunSessionGuard? { TrayMenuModel.shared.isEnabled ? forceRun : nil }
+    static var isServerEnabled: Self? { TrayMenuModel.shared.isEnabled ? forceRun : nil }
     @MainActor
-    static func isServerEnabled(orIsEnableCommand command: (any Command)?) -> RunSessionGuard? {
+    static func isServerEnabled(orIsEnableCommand command: (any Command)?) -> Self? {
         command is EnableCommand ? .forceRun : .isServerEnabled
     }
     @MainActor
-    static func checkServerIsEnabledOrDie(
-        file: StaticString = #fileID,
-        line: Int = #line,
-        column: Int = #column,
-        function: String = #function,
-    ) -> RunSessionGuard {
-        .isServerEnabled ?? dieT("server is disabled", file: file, line: line, column: column, function: function)
+    static func checkServerIsEnabledOrDie(fileId: MyFileId = #myFileId) -> Self {
+        .isServerEnabled ?? dieT("server is disabled", fileId: fileId)
     }
-    static let forceRun = RunSessionGuard()
-    private init() {}
 }
 
 @MainActor
@@ -174,6 +169,7 @@ func refreshModel_nonCancellable() async {
         await checkOnFocusChangedCallbacks_nonCancellable()
     } else {
         Workspace.garbageCollectUnusedWorkspaces()
+        Workspace.forceAssignWorkspaces()
         await checkOnFocusChangedCallbacks_nonCancellable()
         normalizeContainers()
     }
@@ -181,9 +177,10 @@ func refreshModel_nonCancellable() async {
 
 @MainActor
 private func garbageCollectWindowsMissingInWindowServer() {
-    let windows = MacWindow.allWindows
-    let existing = windows.map(\.windowId).toSet().filterExistingInWindowServer()
-    for window in windows where !existing.contains(window.windowId) {
+    let windows = MacWindow.allWindows.compactMap { w in w.nativeWindowId.map { (w, $0) } }
+    let existing = windows.map(\.1).toSet().filterExistingInWindowServer()
+    for (window, nativeWindowId) in windows where !existing.contains(nativeWindowId) {
+        window.lifeStatus = .dead
         window.garbageCollect(skipClosedWindowsCache: false)
     }
 }
@@ -193,21 +190,21 @@ private func garbageCollectWindowsMissingInWindowServer() {
 private func refresh(onlyApp app: MacApp, deferredNativeFocus: Window?) async throws -> Bool {
     let windowsCountBefore = MacWindow.allWindowsMap.count
     var treeChanged = false
-    let windowIds: [UInt32]
+    let windows: [OpaqueWindowId: WindowLifeStatus]
     do {
-        windowIds = try await app.refreshAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        windows = try await app.refreshAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
     } catch {
         if deferredNativeFocus != nil { forgetLastKnownNativeFocusedWindow() } // Let the next session retry the sync
         throw error
     }
-    let alive = windowIds.toSet().filterExistingInWindowServer()
-    for window in MacWindow.allWindows where window.macApp == app && !alive.contains(window.windowId) {
+    for window in MacWindow.allWindows where window.macApp == app && windows[window.windowId] == nil {
+        window.lifeStatus = .dead
         window.garbageCollect(skipClosedWindowsCache: false)
         treeChanged = true
     }
     if let deferredNativeFocus { applyDeferredNativeFocus(deferredNativeFocus) }
-    for windowId in windowIds {
-        try await MacWindow.getOrRegister(windowId: windowId, macApp: app)
+    for (windowId, lifeStatus) in windows {
+        try await MacWindow.getOrRegister(windowId: windowId, macApp: app).lifeStatus = lifeStatus
     }
     Workspace.garbageCollectUnusedWorkspaces()
     return treeChanged || MacWindow.allWindowsMap.count != windowsCountBefore || deferredNativeFocus != nil
@@ -217,14 +214,14 @@ private func refresh(onlyApp app: MacApp, deferredNativeFocus: Window?) async th
 @MainActor
 private func refresh(deferredNativeFocus: Window?, layoutEagerly: Bool) async throws -> Bool {
     // Garbage collect terminated apps and windows before working with all windows
-    let mapping: [MacApp: [UInt32]]
+    let mapping: [MacApp: [OpaqueWindowId: WindowLifeStatus]]
     var treeChanged = false
     do {
-        mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) { app, windowIds in
+        mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier) { app, windows in
             // Closed windows: re-layout as soon as the app answers, don't wait for slower apps
-            let alive = windowIds.toSet().filterExistingInWindowServer()
             var isAnyWindowClosed = false
-            for window in MacWindow.allWindows where window.macApp == app && !alive.contains(window.windowId) {
+            for window in MacWindow.allWindows where window.macApp == app && windows[window.windowId] == nil {
+                window.lifeStatus = .dead
                 window.garbageCollect(skipClosedWindowsCache: false)
                 isAnyWindowClosed = true
             }
@@ -237,23 +234,21 @@ private func refresh(deferredNativeFocus: Window?, layoutEagerly: Bool) async th
         if deferredNativeFocus != nil { forgetLastKnownNativeFocusedWindow() } // Let the next session retry the sync
         throw error
     }
-    // Ghost windows: on recent macOS versions, the AX element of a closed window might keep answering its window id.
-    // A window that doesn't exist in WindowServer is dead for sure (minimized windows, windows of hidden apps, and
-    // windows on other macOS Spaces do exist there). https://github.com/nikitabobko/AeroSpace/issues/1615
-    let aliveWindowIds = mapping.values.flatMap(id).toSet().filterExistingInWindowServer()
+    let aliveWindowIds = mapping.values.flatMap(\.keys).toSet()
 
     let windowsCountBefore = MacWindow.allWindowsMap.count
     for window in MacWindow.allWindows {
         if !aliveWindowIds.contains(window.windowId) {
+            window.lifeStatus = .dead
             window.garbageCollect(skipClosedWindowsCache: false)
             treeChanged = true
         }
     }
     // Sync the native focus only after dead windows are garbage collected. See updateFocusCache
     if let deferredNativeFocus { applyDeferredNativeFocus(deferredNativeFocus) }
-    for (app, windowIds) in mapping {
-        for windowId in windowIds {
-            try await MacWindow.getOrRegister(windowId: windowId, macApp: app)
+    for (app, windows) in mapping {
+        for (windowId, lifeStatus) in windows {
+            try await MacWindow.getOrRegister(windowId: windowId, macApp: app).lifeStatus = lifeStatus
         }
     }
 
@@ -268,7 +263,7 @@ func refreshObs(_: AXObserver, ax: AXUIElement, notif: CFString, refcon: UnsafeM
     nativeFocusEpoch.bump()
     // The notification says which window is destroyed, no need to ask the app for its windows to find out.
     // The element can't be asked anything anymore (that's the confirmation that it's dead), the id comes from refcon
-    let destroyedWindowId: UInt32? = notif == kAXUIElementDestroyedNotification && ax.containingWindowId() == nil
+    let destroyedWindowId: UInt32? = notif == kAXUIElementDestroyedNotification && ax.containingNativeWindowId() == nil
         ? unsafe refconToWindowId(refcon)
         : nil
     Task.startUnstructured { @MainActor in
@@ -276,7 +271,12 @@ func refreshObs(_: AXObserver, ax: AXUIElement, notif: CFString, refcon: UnsafeM
         // WindowServer still shows the window for a while (it fades out), so it can't confirm the death. If an app
         // ever recreates the AX element of a live window, the window is re-detected by the refresh session below and
         // closedWindowsCache puts it back where it was
-        if let destroyedWindowId, let window = MacWindow.allWindowsMap[destroyedWindowId], window.app.pid == pid {
+        // A closed native tab hands its window id over to the next tab (see nonidempotentNativeTabSwapHeuristic),
+        // the regular refresh session sorts that out
+        if let destroyedWindowId, let pid, let window = Window.get(byNativeId: destroyedWindowId, pid: pid) as? MacWindow,
+           !window.macApp.hasNativeTabs(window.windowId)
+        {
+            window.lifeStatus = .dead
             window.garbageCollect(skipClosedWindowsCache: false)
         }
         scheduleCancellableCompleteRefreshSession(.ax(notif), targetPid: pid)
@@ -297,22 +297,22 @@ private func layoutWorkspaces() async throws {
         }
         return
     }
-    let monitors = monitorInfos
-    var monitorToOptimalHideCorner: [CGPoint: OptimalHideCorner] = [:]
+    let monitors = globalUnsortedMonitorInfos
+    var monitorToOptimalHideCorner: [Point: OptimalHideCorner] = [:]
     for monitor in monitors {
         let xOff = monitor.width * 0.1
         let yOff = monitor.height * 0.1
         // brc = bottomRightCorner
-        let brc1 = monitor.rect.bottomRightCorner + CGPoint(x: 2, y: -yOff)
-        let brc2 = monitor.rect.bottomRightCorner + CGPoint(x: -xOff, y: 2)
-        let brc3 = monitor.rect.bottomRightCorner + CGPoint(x: 2, y: 2)
+        let brc1 = monitor.rect.bottomRightCorner + Point(x: 2, y: -yOff)
+        let brc2 = monitor.rect.bottomRightCorner + Point(x: -xOff, y: 2)
+        let brc3 = monitor.rect.bottomRightCorner + Point(x: 2, y: 2)
 
         // blc = bottomLeftCorner
-        let blc1 = monitor.rect.bottomLeftCorner + CGPoint(x: -2, y: -yOff)
-        let blc2 = monitor.rect.bottomLeftCorner + CGPoint(x: xOff, y: 2)
-        let blc3 = monitor.rect.bottomLeftCorner + CGPoint(x: -2, y: 2)
+        let blc1 = monitor.rect.bottomLeftCorner + Point(x: -2, y: -yOff)
+        let blc2 = monitor.rect.bottomLeftCorner + Point(x: xOff, y: 2)
+        let blc3 = monitor.rect.bottomLeftCorner + Point(x: -2, y: 2)
 
-        func contains(_ monitor: MonitorInfo, _ point: CGPoint) -> Int { monitor.rect.contains(point) ? 1 : 0 }
+        func contains(_ monitor: MonitorInfo, _ point: Point) -> Int { monitor.rect.contains(point) ? 1 : 0 }
         let important = 10
 
         let corner: OptimalHideCorner =
@@ -326,7 +326,7 @@ private func layoutWorkspaces() async throws {
     // to reduce flicker, first unhide visible workspaces, then hide invisible ones
     var appsOfUnhiddenWindows: Set<MacApp> = unhideAppsOfVisibleWorkspaces() // ~2ms per app, handled by the system
     for monitor in monitors {
-        let workspace = monitor.activeWorkspace
+        let workspace = monitor.visibleWorkspace
         for window in workspace.allLeafWindowsRecursive {
             let window = window as! MacWindow // todo as!
             if window.isHiddenInCorner { appsOfUnhiddenWindows.insert(window.macApp) }
@@ -343,7 +343,7 @@ private func layoutWorkspaces() async throws {
     let invisibleWindows = Workspace.all.filter { !$0.isVisible }.flatMap { $0.allLeafWindowsRecursive.map { $0 as! MacWindow } } // todo as!
     let cornerWindows = hideAppsOfInvisibleWorkspaces(invisibleWindows)
     let toHide = HideRequests(cornerWindows.map { window in
-        let corner = window.nodeWorkspace.flatMap { monitorToOptimalHideCorner[$0.workspaceMonitor.rect.topLeftCorner] } ?? .bottomRightCorner
+        let corner = window.nodeWorkspace.flatMap { monitorToOptimalHideCorner[$0.workspaceMonitorInfo.rect.topLeftCorner] } ?? .bottomRightCorner
         return (window, corner)
     })
     try await withThrowingTaskGroup(of: Void.self) { group in

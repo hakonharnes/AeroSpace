@@ -1,55 +1,57 @@
 @testable import AppBundle
 import Common
-import XCTest
+import Foundation
+import Testing
 
 @MainActor
-final class PersistedLayoutTest: XCTestCase {
-    override func setUp() async throws { setUpWorkspacesForTests() }
-
-    func testFrozenWorldSurvivesJsonRoundTrip() throws {
-        let a = Workspace.get(byName: "a")
-        a.rootTilingContainer.layout = .accordion
-        let window1 = TestWindow.new(id: 1, parent: a.rootTilingContainer, adaptiveWeight: 2)
-        let nested = TilingContainer(parent: a.rootTilingContainer, adaptiveWeight: 1, .v, .tiles, index: INDEX_BIND_LAST)
-        TestWindow.new(id: 2, parent: nested)
-        TestWindow.new(id: 3, parent: nested)
-        TestWindow.new(id: 4, parent: a.floatingWindowsContainer)
-        let b = Workspace.get(byName: "b")
-        TestWindow.new(id: 5, parent: b.rootTilingContainer)
-        assertTrue(window1.focusWindow())
-
-        let world = FrozenWorld(
-            workspaces: Workspace.all.map { FrozenWorkspace($0) },
-            monitors: monitorInfos.map(FrozenMonitor.init),
-            windowIds: Workspace.all.flatMap { collectAllWindowIdsRecursive($0) }.toSet(),
-            focusedWorkspace: focus.workspace.name,
-            bootTime: 42,
-        )
-        let data = try JSONEncoder().encode(world)
-        let decoded = try JSONDecoder().decode(FrozenWorld.self, from: data)
-
-        assertEquals(decoded.bootTime, 42)
-        assertEquals(decoded.focusedWorkspace, "a")
-        assertEquals(decoded.windowIds, [1, 2, 3, 4, 5])
-        let wsA = try XCTUnwrap(decoded.workspaces.first { $0.name == "a" })
-        assertEquals(wsA.rootTilingNode.layout, .accordion)
-        assertEquals(wsA.rootTilingNode.children.count, 2)
-        guard case .window(let w1) = wsA.rootTilingNode.children[0] else { return XCTFail("window expected") }
-        assertEquals(w1.id, 1)
-        assertEquals(w1.weight, 2)
-        assertEquals(w1.pid, TestApp.shared.pid)
-        guard case .container(let c) = wsA.rootTilingNode.children[1] else { return XCTFail("container expected") }
-        assertEquals(c.orientation, .v)
-        assertEquals(c.children.count, 2)
-        assertEquals(wsA.floatingWindows.map(\.id), [4])
-        let wsB = try XCTUnwrap(decoded.workspaces.first { $0.name == "b" })
-        assertEquals(wsB.rootTilingNode.children.count, 1)
+@Suite(.serializedGlobally)
+struct PersistedLayoutTest {
+    init() {
+        setUpWorkspacesForTests()
+        forgetPersistedLayout()
     }
 
-    func testOldSnapshotsWithoutNewFieldsStillDecode() throws {
-        let json = #"{"workspaces":[],"monitors":[],"windowIds":[]}"#
-        let decoded = try JSONDecoder().decode(FrozenWorld.self, from: Data(json.utf8))
-        XCTAssertNil(decoded.bootTime)
-        XCTAssertNil(decoded.focusedWorkspace)
+    /// The format written by the previous AeroSpace versions (macOS window ids, `[x, y]` points, enums with `_0`)
+    private let snapshot = #"""
+        {"bootTime":42,"focusedWorkspace":"b",
+         "monitors":[{"topLeftCorner":[0,0],"visibleWorkspace":"a"}],
+         "windowIds":[100,200,300,400],
+         "workspaces":[
+           {"name":"a","monitor":{"topLeftCorner":[0,0],"visibleWorkspace":"a"},
+            "floatingWindows":[{"id":400,"pid":7,"weight":1}],"macosUnconventionalWindows":[],
+            "rootTilingNode":{"layout":"accordion","orientation":{"h":{}},"weight":1,"children":[
+              {"window":{"_0":{"id":100,"pid":7,"weight":2}}},
+              {"container":{"_0":{"layout":"tiles","orientation":{"v":{}},"weight":1,"children":[
+                {"window":{"_0":{"id":200,"pid":7,"weight":1}}}]}}}]}},
+           {"name":"b","monitor":{"topLeftCorner":[0,0],"visibleWorkspace":"a"},
+            "floatingWindows":[],"macosUnconventionalWindows":[],
+            "rootTilingNode":{"layout":"tiles","orientation":{"h":{}},"weight":1,"children":[
+              {"window":{"_0":{"id":300,"pid":8,"weight":1}}}]}}]}
+        """#
+
+    @Test func testSnapshotOfPreviousVersionIsDecoded() throws {
+        let (world, focusedWorkspace) = try #require(decodePersistedLayout(Data(snapshot.utf8), expectedBootTime: 42))
+        assertEquals(focusedWorkspace, "b")
+        assertEquals(world.windowIds.count, 4)
+        let monitor = try #require(world.monitors.singleOrNil())
+        assertEquals(monitor.visibleWorkspace, "a")
+        assertEquals(monitor.workspaces.map(\.name), ["a", "b"])
+        let wsA = monitor.workspaces[0]
+        assertEquals(wsA.rootTilingNode.layout, .accordion)
+        guard case .window(let w1) = wsA.rootTilingNode.children[0] else { Issue.record("window expected"); return }
+        assertEquals(w1.weight, 2)
+        guard case .container(let c) = wsA.rootTilingNode.children[1] else { Issue.record("container expected"); return }
+        assertEquals(c.orientation, .v)
+
+        // The windows get the ids of the snapshot once they are detected
+        assertEquals(takePersistedOpaqueWindowId(100, pid: 7), w1.id)
+        assertNil(takePersistedOpaqueWindowId(100, pid: 7)) // Taken
+        assertNil(takePersistedOpaqueWindowId(300, pid: 9)) // Another app reuses the id
+        assertEquals(takePersistedOpaqueWindowId(400, pid: 7), wsA.floatingWindows.singleOrNil()?.id)
+    }
+
+    @Test func testSnapshotIsIgnoredAfterReboot() {
+        assertNil(decodePersistedLayout(Data(snapshot.utf8), expectedBootTime: 43))
+        assertNil(takePersistedOpaqueWindowId(100, pid: 7))
     }
 }

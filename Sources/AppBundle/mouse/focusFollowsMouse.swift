@@ -1,4 +1,5 @@
 import AppKit
+import Common
 
 @MainActor private var focusFollowsMouseMonitor: Any? = nil
 @MainActor private var focusFollowsTask: Task<(), any Error>? = nil
@@ -19,18 +20,18 @@ import AppKit
     // Interestingly, this callback seems to not fire when the mouse is down which is good,
     // because this is how I want it to work for windows/tabs/files dragging
     focusFollowsMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { @MainActor event in
-        let location = event.locationInWindow.withYAxisFlipped
+        let location = event.locationInWindow.asMyPoint.withYAxisFlipped
         focusFollowsTask?.cancel()
+        guard let token: RunSessionGuard = .isServerEnabled else { return }
         focusFollowsTask = Task.startUnstructured { @MainActor in
-            guard let token: RunSessionGuard = .isServerEnabled else { return }
             try checkCancellation()
             // Ignores macOS menubar dropdown, but, unfortunately, it doesn't ignore non-native menu-like fake windows.
             // todo: It would be cool to somehow reuse isWindowHeuristic logic here
             if await isAxWindowUnderMouse(location) == false { return }
             try checkCancellation()
-            let workspace = location.monitorApproximation.activeWorkspace
+            let workspace = location.monitorApproximation.visibleWorkspace
             var window: Window? = nil
-            for child in workspace.floatingWindowsContainer.mruChildren {
+            for child in workspace.floatingWindowsContainer._mruChildren {
                 try checkCancellation()
                 guard let child = child as? Window else { continue }
                 guard let rect = try await child.getAxRect(.cancellable) else { continue }
@@ -53,7 +54,7 @@ import AppKit
 }
 
 @concurrent
-private nonisolated func isAxWindowUnderMouse(_ location: CGPoint) async -> Bool? {
+private nonisolated func isAxWindowUnderMouse(_ location: Point) async -> Bool? {
     let systemwide = AXUIElementCreateSystemWide()
     var element: AXUIElement?
     if unsafe AXUIElementCopyElementAtPosition(systemwide, Float(location.x), Float(location.y), &element) != .success {

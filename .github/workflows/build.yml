@@ -9,53 +9,57 @@ on:
     branches: [ "main" ]
   schedule:
     - cron: '0 0 * * *' # every day at 00:00
+  workflow_call: # Allows other workflows to reuse this workflow as a job (see queue.yml)
+  workflow_dispatch: # Allows running this workflow manually from the Actions tab or via 'gh workflow run'
 
 env:
   AEROSPACE_VERBOSE_BUILD: 1
+  # Consistent compilation everywhere -> faster compilation
+  SWIFTPM_WARNINGS_AS_ERRORS: 1
 
 jobs:
 
   build-debug:
     strategy:
-      # fail-fast: false # Disable fail-fast in matrix
+      fail-fast: false
       matrix:
         # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories
-        # https://github.com/actions/runner-images/blob/main/images/macos/macos-14-arm64-Readme.md
-        # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md
-        # https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md
+        # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md (Max installed Xcode is 26.3)
+        # https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md (Max installed Xcode is 26.6)
         # https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md
         #
         # Xcode versions:
         # - https://en.wikipedia.org/wiki/Xcode
         # - https://xcodereleases.com/?scope=release
-        os: [macos-14, macos-15, macos-26, xcode-27]
+        os: [macos-15, macos-26, xcode-27]
     name: build-debug
     runs-on: ${{ matrix.os }}
     steps:
       - run: env # Debug
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - run: ./.github/gh-actions-runner-xcode-select.sh
-      - run: brew update && brew install swiftly bash
+      - run: brew install bash
+      - run: HOMEBREW_DISABLE_LOAD_FORMULA=1 brew update # Needed for swiftly :(
+      - run: brew install swiftly
       - run: swiftly init --skip-install --assume-yes --verbose && swiftly install
       - run: swiftly run swift --version
       - run: ./build-debug.sh
       - run: ./test.sh
 
-  # We build release artifacts only on the latest macOS versions because:
-  # 1. It cuts the build time twice on GH Actions
-  # 2. The latest Xcode version is not available on old macOS, and old Xcode versions bundle too old Swift version
   build-release:
     strategy:
-      # fail-fast: false # Disable fail-fast in matrix
+      fail-fast: false
       matrix:
         os: [macos-15, macos-26, xcode-27]
     name: build-release
     runs-on: ${{ matrix.os }}
     steps:
       - run: env # Debug
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7.0.1
       - run: ./.github/gh-actions-runner-xcode-select.sh
-      - run: brew update && brew install bash fish xcbeautify swiftly
+      - run: brew install bash fish
+      - run: HOMEBREW_DISABLE_LOAD_FORMULA=1 brew update # Needed for swiftly :(
+      - run: brew install swiftly
       - run: swiftly init --skip-install --assume-yes --verbose && swiftly install
       - run: swiftly run swift --version
       - name: './build-release.sh'
@@ -64,6 +68,7 @@ jobs:
           ./build-release.sh --codesign-identity -
           brew trust nikitabobko/tap
           ./install-from-sources.sh --dont-rebuild
-      - name: cat ./.release/xcodebuild.log
+      - run: cat ./.release/build-cli.log
         if: ${{ always() }}
-        run: 'if test -f ./.release/xcodebuild.log; then cat ./.release/xcodebuild.log; fi'
+      - run: cat ./.release/build-app.log
+        if: ${{ always() }}

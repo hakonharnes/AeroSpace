@@ -1,35 +1,36 @@
 @testable import AppBundle
 import Common
-import XCTest
+import Testing
 
 @MainActor
-final class EvalCommandTest: XCTestCase {
-    override func setUp() async throws { setUpWorkspacesForTests() }
+@Suite(.serializedGlobally)
+struct EvalCommandTest {
+    init() { setUpWorkspacesForTests() }
 
-    func testParse() {
-        testParseSingleCommandSucc("eval 'workspace foo'", EvalCmdArgs(rawArgs: []).copy(\.shellExpr, .initialized("workspace foo")))
+    @Test func testParse() {
+        testParseSingleCommandSucc("eval 'workspace foo'", EvalCmdArgs(rawArgs: []).with(\.shellExpr, .initialized("workspace foo")))
         assertEquals(parseCommand("eval").errorOrNil, "ERROR: Argument '<aerospace-shell-expr>' is mandatory")
     }
 
-    func testParseDashDash() {
+    @Test func testParseDoubleDash() {
         testParseSingleCommandSucc(
             "eval -- '--anything'",
-            EvalCmdArgs(rawArgs: []).copy(\.shellExpr, .initialized("--anything")),
+            EvalCmdArgs(rawArgs: []).with(\.shellExpr, .initialized("--anything")),
         )
         assertEquals(parseCommand("eval --").errorOrNil, "ERROR: Argument '<aerospace-shell-expr>' is mandatory")
     }
 
-    func testRunSimpleCommand() async {
+    @Test func testRunSimpleCommand() async {
         assertTrue(Workspace.get(byName: "a").focusWorkspace())
 
         let result = await parseCommand("eval 'workspace b'").cmdOrDie.run(.defaultEnv, .emptyStdin)
         assertEquals(result.exitCode.rawValue, 0)
         assertEquals(result.stdout, [])
         assertEquals(result.stderr, [])
-        assertEquals(focus.workspace.name, "b")
+        assertEquals(globalFocus.workspace.name, "b")
     }
 
-    func testRunForwardsStdout() async {
+    @Test func testRunForwardsStdout() async {
         assertTrue(Workspace.get(byName: name).focusWorkspace())
 
         let result = await parseCommand("eval 'echo -- hello'").cmdOrDie.run(.defaultEnv, .emptyStdin)
@@ -38,15 +39,15 @@ final class EvalCommandTest: XCTestCase {
         assertEquals(result.stderr, [])
     }
 
-    func testRunShellComposition() async {
+    @Test func testRunShellComposition() async {
         assertTrue(Workspace.get(byName: "a").focusWorkspace())
 
         let result = await parseCommand("eval 'workspace a && workspace b'").cmdOrDie.run(.defaultEnv, .emptyStdin)
         assertEquals(result.exitCode.rawValue, 0)
-        assertEquals(focus.workspace.name, "b")
+        assertEquals(globalFocus.workspace.name, "b")
     }
 
-    func testRunEmptyShellExpr() async {
+    @Test func testRunEmptyShellExpr() async {
         assertTrue(Workspace.get(byName: name).focusWorkspace())
 
         let result = await parseCommand("eval ''").cmdOrDie.run(.defaultEnv, .emptyStdin)
@@ -55,7 +56,7 @@ final class EvalCommandTest: XCTestCase {
         assertEquals(result.stderr, [])
     }
 
-    func testRunUnrecognizedSubcommand() async {
+    @Test func testRunUnrecognizedSubcommand() async {
         assertTrue(Workspace.get(byName: name).focusWorkspace())
 
         let result = await parseCommand("eval 'no-such-command'").cmdOrDie.run(.defaultEnv, .emptyStdin)
@@ -64,7 +65,7 @@ final class EvalCommandTest: XCTestCase {
         assertEquals(result.stderr, ["Unrecognized subcommand 'no-such-command'"])
     }
 
-    func testRunInnerParseFailureForwardsErrorAndExitCode() async {
+    @Test func testRunInnerParseFailureForwardsErrorAndExitCode() async {
         assertTrue(Workspace.get(byName: name).focusWorkspace())
 
         let result = await parseCommand("eval 'workspace'").cmdOrDie.run(.defaultEnv, .emptyStdin)
@@ -73,7 +74,7 @@ final class EvalCommandTest: XCTestCase {
         assertEquals(result.stderr, ["ERROR: Argument '(<workspace-name>|next|prev)' is mandatory"])
     }
 
-    func testRunRejectsInnerHelp() async {
+    @Test func testRunRejectsInnerHelp() async {
         assertTrue(Workspace.get(byName: name).focusWorkspace())
 
         let result = await parseCommand("eval 'workspace --help'").cmdOrDie.run(.defaultEnv, .emptyStdin)
@@ -82,12 +83,12 @@ final class EvalCommandTest: XCTestCase {
         assertEquals(result.stderr, ["--help is not supported inside eval command"])
     }
 
-    func testRunNestedEval() async {
+    @Test func testRunNestedEval() async {
         assertTrue(Workspace.get(byName: "a").focusWorkspace())
 
         let result = await parseCommand("eval 'eval \"workspace b\"'").cmdOrDie.run(.defaultEnv, .emptyStdin)
         assertEquals(result.exitCode.rawValue, 2)
         assertEquals(result.stderr, ["Illegal eval (Tip: nested evals are forbidden)"])
-        assertEquals(focus.workspace.name, "a")
+        assertEquals(globalFocus.workspace.name, "a")
     }
 }

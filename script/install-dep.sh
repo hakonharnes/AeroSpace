@@ -22,7 +22,7 @@ while test $# -gt 0; do
     esac
 done
 
-get-marker() { echo ".deps/markers/$1/$(echo "$@" | shasum | awk '{print $1}').marker"; }
+get-marker() { echo ".deps/markers/$1/$(echo "$@" | shasum -a 256 | awk '{print $1}').marker"; }
 
 create-marker() {
     dir="$(dirname "$1")"
@@ -74,48 +74,40 @@ lazy-download-zip-and-link-bin() {
 
 if test $all == 1 || test $swiftlint == 1; then
     # https://github.com/realm/SwiftLint/releases
-    swiftlint_version=0.63.2
+    swiftlint_version=0.65.1
     lazy-download-zip-and-link-bin \
         swiftlint \
         https://github.com/realm/SwiftLint/releases/download/$swiftlint_version/SwiftLintBinary.artifactbundle.zip \
-        '12befab676fc972ffde2ec295d016d53c3a85f64aabd9c7fee0032d681e307e9  .deps/swiftlint/dist/zip.zip' \
+        'c3a1d77647ca18c1b7e9be7dbc6cd4490d26422f28814b76370244ff61970869  .deps/swiftlint/dist/zip.zip' \
         SwiftLintBinary.artifactbundle/macos/swiftlint
 fi
 
 if test $all == 1 || test $xcodegen == 1; then
     # https://github.com/yonaskolb/XcodeGen/releases
-    xcodegen_version=2.45.3
+    xcodegen_version=2.46.0
     lazy-download-zip-and-link-bin \
         xcodegen \
         https://github.com/yonaskolb/XcodeGen/releases/download/$xcodegen_version/xcodegen.artifactbundle.zip \
-        '6a3cb84183c7fc88ebe0796af6a84bbf07b005bcdc61eaaef13a8a661d0675b8  .deps/xcodegen/dist/zip.zip' \
+        'ef6d0a23bfb7393387f98e321ffd78a487231172e2e78c48d3c26275c263fd0c  .deps/xcodegen/dist/zip.zip' \
         xcodegen.artifactbundle/xcodegen-$xcodegen_version-macosx/bin/xcodegen
 fi
 
 if test $all == 1 || test $swiftformat == 1; then
     # https://github.com/nicklockwood/SwiftFormat/releases
-    swiftformat_version=0.60.1
+    swiftformat_version=0.64.4
     lazy-download-zip-and-link-bin \
         swiftformat \
         https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.artifactbundle.zip \
-        'cb4738085cf39c08da00b79b4a3683e77458ca12909934d04e5087d8e73f5e43  .deps/swiftformat/dist/zip.zip' \
+        'c2ba19f5f70a1aba089f836ada7960268ec9a68671d61059fec1a565afb50836  .deps/swiftformat/dist/zip.zip' \
         swiftformat.artifactbundle/swiftformat-$swiftformat_version-macos/bin/swiftformat
 fi
 
 if test $all == 1 || test $periphery == 1; then
-    # https://github.com/peripheryapp/periphery/releases
-    periphery_commit=85a24b9ea801c0e57a73679ec5b3a44812ea5f22
-    periphery_repo=https://github.com/nikitabobko/periphery.git
-    input_hash_marker="periphery/$(echo $periphery_commit $periphery_repo | shasum | awk '{print $1}').marker"
-
-    if ! test -f "$input_hash_marker"; then
-        echo "building periphery from sources"
-        test -d periphery || git clone --depth 1 $periphery_repo
-        cd periphery
-            git fetch --depth 1 $periphery_repo $periphery_commit
-            git checkout -f $periphery_commit
-            swift build
-        cd -
-        touch "$input_hash_marker"
-    fi
+    # https://github.com/nikitabobko/periphery/releases
+    periphery_version=1.0.0
+    lazy-download-zip-and-link-bin \
+        periphery \
+        https://github.com/nikitabobko/periphery/releases/download/v$periphery_version/periphery-arm-v$periphery_version.zip \
+        '28ef394d85c0b7edc76b9060f519cc03742c865c4a922a2e8efe27344e5e2132  .deps/periphery/dist/zip.zip' \
+        periphery
 fi

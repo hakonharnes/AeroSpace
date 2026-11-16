@@ -1,75 +1,48 @@
-@MainActor
-func normalizeLayoutReason(onlyApp: MacApp? = nil) async throws {
+import Common
+
+
+@MainActor func normalizeLayoutReason(onlyApp: MacApp? = nil) async throws {
     func ofTheApp(_ window: Window) -> Bool { onlyApp == nil || window.app.pid == onlyApp?.pid }
     let workspaceWindows = Workspace.all.map { ($0, $0.allLeafWindowsRecursive.filter(ofTheApp)) }
     let minimizedWindows = macosMinimizedWindowsContainer.children.filterIsInstance(of: Window.self).filter(ofTheApp)
     // Query all the windows concurrently. Windows of different apps are served by different AX threads,
-    // querying them one by one makes every refresh session as slow as the sum of all apps' AX latencies
+    // querying them workspace by workspace makes every refresh session slower
     // https://github.com/nikitabobko/AeroSpace/issues/1615
-    let states = try await fetchMacosNativeStates(workspaceWindows.flatMap { $0.1 } + minimizedWindows)
+    let allWindows = workspaceWindows.flatMap { $0.1 } + minimizedWindows
+    let allStates = try await allWindows.mapConcurrently { try await $0.getMacosWindowNativeState(.cancellable) }
+    var states: [OpaqueWindowId: MacosWindowNativeState] = [:]
+    for (window, state) in zip(allWindows, allStates) {
+        states[window.windowId] = state
+    }
     for (workspace, windows) in workspaceWindows {
         try await _normalizeLayoutReason(workspace: workspace, windows: windows, states)
     }
-    try await _normalizeLayoutReason(workspace: focus.workspace, windows: minimizedWindows, states)
+    try await _normalizeLayoutReason(workspace: globalFocus.workspace, windows: minimizedWindows, states)
     try await validateStillPopups(ofTheApp)
 }
 
-private struct MacosNativeState {
-    let isFullscreen: Bool
-    let isMinimized: Bool
-}
-
-/// Main actor isolated, hence Sendable. Allows passing windows to the task group children
-@MainActor
-private final class WindowsRef {
-    let windows: [Window]
-    init(_ windows: [Window]) { self.windows = windows }
-}
-
-@MainActor
-private func fetchMacosNativeStates(_ windows: [Window]) async throws -> [UInt32: MacosNativeState] {
-    let ref = WindowsRef(windows)
-    return try await withThrowingTaskGroup(of: (UInt32, MacosNativeState).self) { group in
-        for index in ref.windows.indices {
-            group.addTask { @Sendable @MainActor in
-                let window = ref.windows[index]
-                let isFullscreen = try await window.isMacosFullscreen(.cancellable)
-                let isMinimized = try await (!isFullscreen).andAsync { @MainActor @Sendable in try await window.isMacosMinimized(.cancellable) }
-                return (window.windowId, MacosNativeState(isFullscreen: isFullscreen, isMinimized: isMinimized))
-            }
-        }
-        var result: [UInt32: MacosNativeState] = [:]
-        for try await (windowId, state) in group {
-            result[windowId] = state
-        }
-        return result
-    }
-}
-
-@MainActor
-private func validateStillPopups(_ filter: (Window) -> Bool) async throws {
+@MainActor private func validateStillPopups(_ filter: (Window) -> Bool) async throws {
     for node in macosPopupWindowsContainer.children where filter(node as! MacWindow) && (node as! MacWindow).tabGroup == nil {
         let popup = (node as! MacWindow)
-        let windowLevel = getWindowLevel(for: popup.windowId)
+        let windowLevel = try await popup.getWindowLevel(.cancellable)
         if try await popup.isWindowHeuristic(windowLevel, .cancellable) {
-            try await popup.relayoutWindow(on: focus.workspace, .cancellable)
+            try await popup.relayoutWindow(on: globalFocus.workspace, .cancellable)
             await runOnWindowDetected(ifConventional: popup)
         }
     }
 }
 
-@MainActor
-private func _normalizeLayoutReason(workspace: Workspace, windows: [Window], _ states: [UInt32: MacosNativeState]) async throws {
+@MainActor private func _normalizeLayoutReason(workspace: Workspace, windows: [Window], _ states: [OpaqueWindowId: MacosWindowNativeState]) async throws {
     for window in windows {
         guard let state = states[window.windowId] else { continue }
-        let isMacosFullscreen = state.isFullscreen
-        let isMacosMinimized = state.isMinimized
+        let isMacosFullscreen = state == .nativeFullscreen
+        let isMacosMinimized = state == .nativeMinimized
         let isMacosWindowOfHiddenApp = !isMacosFullscreen && !isMacosMinimized &&
             !config.automaticallyUnhideMacosHiddenApps && window.macAppUnsafe.nsApp.isHidden &&
             !isAppHiddenByAeroSpace(window.app.pid)
         switch window.layoutReason {
             case .standard:
-                guard let parent = window.parent else { continue }
+                guard let parent = window.windowParentCases else { continue }
                 switch true {
                     case isMacosFullscreen:
                         window.layoutReason = .macos(prevParentKind: parent.kind)
@@ -90,10 +63,9 @@ private func _normalizeLayoutReason(workspace: Workspace, windows: [Window], _ s
     }
 }
 
-@MainActor
-func exitMacOsNativeUnconventionalState(
+@MainActor func exitMacOsNativeUnconventionalState(
     window: Window,
-    prevParentKind: NonLeafTreeNodeKind,
+    prevParentKind: WindowParentCases.Kind,
     workspace: Workspace,
     _ cm: CancellationMode,
 ) async throws {
@@ -101,8 +73,6 @@ func exitMacOsNativeUnconventionalState(
     switch prevParentKind {
         case .floatingWindowsContainer:
             window.bindAsFloatingWindow(to: workspace)
-        case .workspace:
-            break // Not possible
         case .tilingContainer:
             try await window.relayoutWindow(on: workspace, cm, forceTile: true)
         case .macosPopupWindowsContainer: // Since the window was minimized/fullscreened it was mistakenly detected as popup. Relayout the window

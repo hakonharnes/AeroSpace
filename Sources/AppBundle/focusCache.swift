@@ -1,7 +1,7 @@
 import AppKit
 import Common
 
-@MainActor private var lastKnownNativeFocusedWindowId: UInt32? = nil
+@MainActor private var lastKnownNativeFocusedWindowId: OpaqueWindowId? = nil
 
 /// The data should flow (from nativeFocused to focused) and
 ///                      (from nativeFocused to lastKnownNativeFocusedWindowId)
@@ -31,7 +31,7 @@ import Common
         }
         lastKnownNativeFocusedWindowId = nativeFocused?.windowId
     }
-    (nativeFocused?.app as? MacApp)?.lastNativeFocusedWindowId = nativeFocused?.windowId
+    (nativeFocused?.app as? MacApp)?.lastFocusedNativeWindowOpaqueId = nativeFocused?.windowId
     return deferred
 }
 
@@ -91,7 +91,7 @@ struct NativeFocusSnapshot: Equatable {
     guard let nativeFocused else { return }
     if isFocusStolenByMacosAfterWindowClose(nativeFocused) {
         // Keep the AeroSpace focus. Give the focus back to the window that AeroSpace considers focused
-        focus.windowOrNil?.nativeFocus()
+        globalFocus.windowOrNil?.nativeFocus()
     } else {
         _ = nativeFocused.focusWindow()
     }
@@ -123,7 +123,7 @@ private let focusStealGuardDuration: TimeInterval = 1
     }
     // Only guard against jumps from the workspace where the window was closed to invisible workspaces.
     // Focusing a window on a visible workspace (e.g. a click on a window on a different monitor) is legit
-    return focus.workspace.name == g.workspaceName && nativeFocused.isOnInvisibleWorkspace
+    return globalFocus.workspace.name == g.workspaceName && nativeFocused.isOnInvisibleWorkspace
 }
 
 @MainActor private var forceNativeFocusAfterWindowDeathTask: Task<(), Never>? = nil
@@ -134,10 +134,10 @@ private let focusStealGuardDuration: TimeInterval = 1
 /// yet (e.g. a "checking for updates" window followed by the result dialog), or another app is active. Forcing the focus
 /// would then activate and raise the heir over that window. Ask the frontmost app first, and force the focus only if it
 /// has no focused window, it still reports the dead one, or macOS jumped to a window on an invisible workspace
-@MainActor func forceNativeFocusIfLostAfterWindowDeath(_ heir: Window, deadWindowId: UInt32) {
+@MainActor func forceNativeFocusIfLostAfterWindowDeath(_ heir: Window, deadWindowId: OpaqueWindowId) {
     forceNativeFocusAfterWindowDeathTask?.cancel()
     forceNativeFocusAfterWindowDeathTask = Task.startUnstructured { @MainActor in
-        let nativeFocusedId: UInt32? = if let frontmost = NSWorkspace.shared.frontmostApplication,
+        let nativeFocusedId: OpaqueWindowId? = if let frontmost = NSWorkspace.shared.frontmostApplication,
                                           let app = try? await MacApp.getOrRegister(frontmost)
         {
             try? await app.getAxFocusedWindowId(.cancellable)
@@ -150,7 +150,7 @@ private let focusStealGuardDuration: TimeInterval = 1
         {
             return // The native focus is on a live window. The refresh session syncs it
         }
-        guard focus.windowOrNil == heir else { return } // Something else has moved the focus in the meantime
+        guard globalFocus.windowOrNil == heir else { return } // Something else has moved the focus in the meantime
         heir.nativeFocus()
     }
 }
@@ -159,7 +159,7 @@ private let focusStealGuardDuration: TimeInterval = 1
 @MainActor private var appsQuitByAeroSpace: [pid_t: String] = [:]
 
 @MainActor func rememberAppQuitByAeroSpace(_ pid: pid_t) {
-    appsQuitByAeroSpace[pid] = focus.workspace.name
+    appsQuitByAeroSpace[pid] = globalFocus.workspace.name
 }
 
 @MainActor private var lastActivatedAppPid: pid_t? = nil
@@ -183,7 +183,7 @@ private let focusStealGuardDuration: TimeInterval = 1
 /// When the active app terminates, macOS activates some other app, even if the terminated app didn't have windows
 /// on the focused workspace
 @MainActor func onAppTerminated(_ pid: pid_t) {
-    let focusedWorkspace = focus.workspace
+    let focusedWorkspace = globalFocus.workspace
     let quitFrom = appsQuitByAeroSpace.removeValue(forKey: pid)
     if quitFrom == focusedWorkspace.name || wasActiveRightBeforeTermination(pid) ||
         MacWindow.allWindows.contains(where: { $0.app.pid == pid && $0.nodeWorkspace == focusedWorkspace })
@@ -197,12 +197,12 @@ private let focusStealGuardDuration: TimeInterval = 1
 // even after it has already reported the requested window). Syncing that stale focus back to AeroSpace makes
 // AeroSpace jump back to the previous workspace and then jump forward again. Status bars that call `aerospace list-*`
 // on every workspace change hit it all the time.
-@MainActor private var pendingNativeFocusRequest: (windowId: UInt32, deadline: Date, processed: Bool)? = nil
+@MainActor private var pendingNativeFocusRequest: (windowId: OpaqueWindowId, deadline: Date, processed: Bool)? = nil
 @MainActor private var pendingNativeFocusRecheck: Task<(), Never>? = nil
 private let nativeFocusRequestTimeout: TimeInterval = 0.5
 private let nativeFocusRequestSettlePeriod: TimeInterval = 0.3
 
-@MainActor func onNativeFocusRequested(_ windowId: UInt32) {
+@MainActor func onNativeFocusRequested(_ windowId: OpaqueWindowId) {
     pendingNativeFocusRequest = (windowId, .now + nativeFocusRequestTimeout, false)
     nativeFocusEpoch.bump()
 }

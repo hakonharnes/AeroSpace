@@ -6,6 +6,7 @@ import Foundation
     Task.startUnstructured {
         initTerminationHandler()
         unsafe _isCli = false
+        unsafe _isUnitTest = false
         initServerArgs()
         await waitForAccessibilityPermission_nonCancellable()
         if isDebug {
@@ -21,7 +22,11 @@ import Foundation
         startUnixSocketServer()
         GlobalObserver.initObserver()
         Workspace.garbageCollectUnusedWorkspaces() // init workspaces
-        _ = Workspace.all.first?.focusWorkspace()
+        for monitor in Monitor.all {
+            _ = monitor.getWorkspacesContainerOrCreate().children.filterIsInstance(of: Workspace.self)
+                .min()?
+                .focusWorkspace()
+        }
         // Windows detected during the startup refresh session are put back where they were
         let previouslyFocusedWorkspace = loadPersistedLayout()
         await runHeavyCompleteRefreshSession(
@@ -35,6 +40,7 @@ import Foundation
             _ = Workspace.get(byName: previouslyFocusedWorkspace).focusWorkspace()
         }
         resetClosedWindowsCache() // From now on, the cache serves the lock screen only
+        forgetPersistedLayout()
         try await runLightSession(.startup, .forceRun) {
             _ = await config.afterStartupCommand.run(.defaultEnv, .emptyStdin)
         }

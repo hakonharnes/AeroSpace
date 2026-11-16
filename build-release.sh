@@ -12,6 +12,9 @@ while test $# -gt 0; do
     esac
 done
 
+source ./versions.sh
+export SWIFTPM_MACOS_MIN_DEPLOYMENT_TARGET=$MACOS_MIN_DEPLOYMENT_TARGET
+
 #############
 ### BUILD ###
 #############
@@ -21,84 +24,44 @@ done
 
 ./generate.sh
 ./script/check-uncommitted-files.sh
-./generate.sh --build-version "$build_version" --codesign-identity "$codesign_identity" --generate-git-hash
 
-swift_build_cli=(build -c release --arch arm64 --arch x86_64 --product aerospace)
-swift "${swift_build_cli[@]}" -Xswiftc -warnings-as-errors # CLI
-cli_bin_path="$(swift "${swift_build_cli[@]}" --show-bin-path)"
+build_info_file="$PWD/.build-info.txt"
+printf '%s\n%s\n%s\n' "$build_version" "$(git rev-parse HEAD)" "$(git rev-parse --short HEAD)" > "$build_info_file"
 
 rm -rf .release && mkdir .release
 
-cd ./xcode
-    xcode_configuration="Release"
-    xcodebuild -version
-    xcodebuild-pretty ../.release/xcodebuild.log clean build \
-        -scheme AeroSpace \
-        -destination "generic/platform=macOS" \
-        -configuration "$xcode_configuration" \
-        -derivedDataPath .xcode-build
-cd -
+# Job control puts each build into its own process group, so that the trap kills the whole process tree
+set -m
 
-git checkout .
+cli_log=$PWD/.release/build-cli.log
+app_log=$PWD/.release/build-app.log
 
-cp -r "xcode/.xcode-build/Build/Products/$xcode_configuration/AeroSpace.app" .release
-cp -r "$cli_bin_path/aerospace" .release
+echo "$app_log"
+echo "$cli_log"
 
-################
-### SIGN CLI ###
-################
+./script/build-release-cli.sh \
+    --build-info-file "$build_info_file" \
+    --codesign-identity "$codesign_identity" > "$cli_log" 2>&1 &
+build_cli_pid=$!
 
-codesign -s "$codesign_identity" .release/aerospace
+./script/build-release-app.sh \
+    --build-info-file "$build_info_file" \
+    --build-version "$build_version" \
+    --codesign-identity "$codesign_identity" > "$app_log" 2>&1 &
+build_app_pid=$!
+
+trap 'kill -- -$build_cli_pid -$build_app_pid 2> /dev/null' EXIT
+
+wait "$build_cli_pid"
+wait "$build_app_pid"
+trap - EXIT # Remove EXIT trap
+set +m
 
 ################
 ### VALIDATE ###
 ################
 
-expected_layout=$(cat <<EOF
-.release/AeroSpace.app
-.release/AeroSpace.app/Contents
-.release/AeroSpace.app/Contents/_CodeSignature
-.release/AeroSpace.app/Contents/_CodeSignature/CodeResources
-.release/AeroSpace.app/Contents/MacOS
-.release/AeroSpace.app/Contents/MacOS/AeroSpace
-.release/AeroSpace.app/Contents/Resources
-.release/AeroSpace.app/Contents/Resources/default-config.toml
-.release/AeroSpace.app/Contents/Resources/AppIcon.icns
-.release/AeroSpace.app/Contents/Resources/Assets.car
-.release/AeroSpace.app/Contents/Info.plist
-.release/AeroSpace.app/Contents/PkgInfo
-EOF
-)
-
-if test "$expected_layout" != "$(find .release/AeroSpace.app)"; then
-    echo "!!! Expect/Actual layout don't match !!!"
-    find .release/AeroSpace.app
-    exit 1
-fi
-
-check-universal-binary() {
-    if ! file "$1" | grep --fixed-string -q "Mach-O universal binary with 2 architectures: [x86_64:Mach-O 64-bit executable x86_64] [arm64"; then
-        echo "$1 is not a universal binary"
-        exit 1
-    fi
-}
-
-check-contains-hash() {
-    hash=$(git rev-parse HEAD)
-    if ! strings "$1" | grep --fixed-string "$hash" > /dev/null; then
-        echo "$1 doesn't contain $hash"
-        exit 1
-    fi
-}
-
-check-universal-binary .release/AeroSpace.app/Contents/MacOS/AeroSpace
-check-universal-binary .release/aerospace
-
-check-contains-hash .release/AeroSpace.app/Contents/MacOS/AeroSpace
-check-contains-hash .release/aerospace
-
-codesign -v .release/AeroSpace.app
-codesign -v .release/aerospace
+./script/validate-release-binaries.sh
 
 ############
 ### PACK ###
@@ -122,3 +85,9 @@ for cask_name in aerospace aerospace-dev; do
         --zip-uri ".release/AeroSpace-v$build_version.zip" \
         --build-version "$build_version"
 done
+
+############
+### Done ###
+############
+echo
+echo "$PWD"/.release/*.zip

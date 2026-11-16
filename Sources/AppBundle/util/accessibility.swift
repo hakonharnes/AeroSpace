@@ -265,15 +265,15 @@ enum Ax {
             return unsafe AXValueCreate(.cgSize, &size) as CFTypeRef
         },
     )
-    static let topLeftCornerAttr = WritableAttrImpl<CGPoint>(
+    static let topLeftCornerAttr = WritableAttrImpl<Point>(
         key: kAXPositionAttribute,
         getter: {
             var raw: CGPoint = .zero
             check(unsafe AXValueGetValue($0 as! AXValue, .cgPoint, &raw))
-            return raw
+            return raw.asMyPoint
         },
         setter: {
-            var size = $0
+            var size = $0.asCGPoint
             return unsafe AXValueCreate(.cgPoint, &size) as CFTypeRef
         },
     )
@@ -320,10 +320,10 @@ let kAXAeroSynthetic = "Aero.synthetic"
 private func castToAxUiElementMock(_ a: AnyObject) -> AxUiElementMock {
     if isUnitTest {
         if let str = a as? String, let commaIndex = str.firstIndex(of: ",") {
-            let windowId = UInt32.init(String(str.prefix(upTo: commaIndex)).removePrefix("AXUIElement(AxWindowId="))
+            let windowId = UInt32.init(String(str.prefix(upTo: commaIndex)).removePrefix("AXUIElement(windowId_native="))
             if let windowId {
                 return castToAxUiElementMock([
-                    "Aero.axWindowId": Json.int(windowId),
+                    "Aero.windowId_native": Json.int(windowId),
                     kAXAeroSynthetic: Json.bool(true),
                 ] as AnyObject)
             }
@@ -343,7 +343,7 @@ private func windowOrNil(_ any: Any?) -> WindowIdAndAxUiElementMock? {
     guard let any else { return nil }
     let potentialWindow = castToAxUiElementMock(any as AnyObject)
     // Filter out non-window objects (e.g. Finder's desktop)
-    return switch potentialWindow.containingWindowId() {
+    return switch potentialWindow.containingNativeWindowId() {
         case let windowId?: (windowId, potentialWindow)
         case nil: nil
     }
@@ -367,13 +367,18 @@ extension AXUIElement: AxUiElementMock {
         return AXUIElementSetAttributeValue(self, attr.key as CFString, value) == .success
     }
 
-    func containingWindowId() -> CGWindowID? {
+    func containingNativeWindowId() -> CGWindowID? {
         let state = signposter.beginInterval(#function, "axTaskLocalAppThreadToken: \(axTaskLocalAppThreadToken?.idForDebug)")
         defer { signposter.endInterval(#function, state) }
         var cgWindowId = CGWindowID()
         return unsafe _AXUIElementGetWindow(self, &cgWindowId) == .success && cgWindowId != kCGNullWindowID
             ? cgWindowId
             : nil
+    }
+
+    var pid: pid_t? {
+        var pid: pid_t = 0
+        return unsafe AXUIElementGetPid(self, &pid) == .success ? pid : nil
     }
 }
 

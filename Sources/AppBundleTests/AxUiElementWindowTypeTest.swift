@@ -1,9 +1,12 @@
 @testable import AppBundle
+import AppKit
 import Common
-import XCTest
+import Testing
 
-final class AxWindowKindTest: XCTestCase {
-    func test() throws {
+@MainActor
+@Suite(.serializedGlobally)
+struct AxWindowKindTest {
+    @Test func test() throws {
         try checkAxDumpsRecursive(projectRoot.appending(path: "./axDumps"))
     }
 }
@@ -50,10 +53,10 @@ extension [String: Json]: AxUiElementMock {
 
     private var isSynthetic: Bool { self[kAXAeroSynthetic] != nil }
 
-    public func containingWindowId() -> CGWindowID? { _containingWindowId() }
+    public func containingNativeWindowId() -> CGWindowID? { _containingNativeWindowId() }
 
-    private func _containingWindowId() -> CGWindowID {
-        let windowId = self["Aero.axWindowId"]?.asInt64OrNil ?? dieT()
+    private func _containingNativeWindowId() -> CGWindowID {
+        let windowId = self["Aero.windowId_native"]?.asInt64OrNil ?? dieT()
         return UInt32.init(exactly: windowId).orDie()
     }
 }

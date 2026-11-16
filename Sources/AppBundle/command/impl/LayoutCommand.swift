@@ -22,15 +22,16 @@ struct LayoutCommand: Command {
                 switch window.windowParentCases {
                     case .floatingWindowsContainer(let it):
                         node = .floatingWindowsContainer(it)
-                    case .tilingContainer(let it):
-                        node = .tilingContainer(it)
+                    case .tilingContainer:
+                        guard let (parent, _) = window.nearestAliveTilingParent() else { return .fail(io.err(bugPrompt())) }
+                        node = .tilingContainer(parent)
                     case .macosFullscreenWindowsContainer,
                          .macosHiddenAppsWindowsContainer,
                          .macosMinimizedWindowsContainer:
                         let msg = "Can't change layout for macOS minimized, fullscreen windows or windows or hidden apps. " +
                             "This behavior is subject to change"
                         return .fail(io.err(msg))
-                    case .unbound, .macosPopupWindowsContainer:
+                    case nil, .macosPopupWindowsContainer:
                         return .fail(io.err(bugPrompt()))
                 }
             case nil:

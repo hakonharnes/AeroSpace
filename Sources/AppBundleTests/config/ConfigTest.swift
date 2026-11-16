@@ -1,10 +1,11 @@
 @testable import AppBundle
 import Common
-import XCTest
+import Testing
 
 @MainActor
-final class ConfigTest: XCTestCase {
-    func testParseI3Config() {
+@Suite(.serializedGlobally)
+struct ConfigTest {
+    @Test func testParseI3Config() {
         let toml = try! String(contentsOf: projectRoot.appending(component: "docs/config-examples/i3-like-config-example.toml"), encoding: .utf8)
         let result = parseConfig(toml)
         assertEquals(result.errors, [])
@@ -14,7 +15,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.config.enableNormalizationOppositeOrientationForNestedContainers, false)
     }
 
-    func testEmptyConfig() {
+    @Test func testEmptyConfig() {
         let result = parseConfig("")
         assertEquals(result.errors, [])
         assertTrue(result.allowReloadConfig)
@@ -22,14 +23,14 @@ final class ConfigTest: XCTestCase {
         assertTrue(result.strWarnings.first?.starts(with: "[WARNING] The current 'config-version = 1' is outdated.") == true)
     }
 
-    func testParseDefaultConfig() {
+    @Test func testParseDefaultConfig() {
         let toml = try! String(contentsOf: projectRoot.appending(component: "docs/config-examples/default-config.toml"), encoding: .utf8)
         let result = parseConfig(toml)
         assertEquals(result.errors, [])
         assertEquals(result.warnings, [])
     }
 
-    func testParseHideAppsOnInvisibleWorkspaces() {
+    @Test func testParseHideAppsOnInvisibleWorkspaces() {
         assertEquals(parseConfig("config-version = 2").config.hideAppsOnInvisibleWorkspaces, .slow)
         for (raw, expected) in [("never", HideAppsOnInvisibleWorkspaces.never), ("slow", .slow), ("always", .always)] {
             let result = parseConfig("config-version = 2\nhide-apps-on-invisible-workspaces = '\(raw)'")
@@ -41,7 +42,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(parseConfig("config-version = 2\nrestore-layout-on-restart = false").config.restoreLayoutOnRestart, false)
     }
 
-    func testConfigVersionOutOfBounds() {
+    @Test func testConfigVersionOutOfBounds() {
         let result = parseConfig(
             """
             config-version = 0
@@ -51,7 +52,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.strErrors, ["[ERROR] config-version: config-version must be in [1, 2] range"])
     }
 
-    func testConfigVersionOutdatedWarning() {
+    @Test func testConfigVersionOutdatedWarning() {
         let result = parseConfig(
             """
             config-version = 1
@@ -66,7 +67,7 @@ final class ConfigTest: XCTestCase {
         ])
     }
 
-    func testLatestConfigVersionNoWarning() {
+    @Test func testLatestConfigVersionNoWarning() {
         let result = parseConfig(
             """
             config-version = \(ConfigVersion.max)
@@ -76,7 +77,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.warnings, [])
     }
 
-    func testExecOnWorkspaceChangeDifferentTypesError() {
+    @Test func testExecOnWorkspaceChangeDifferentTypesError() {
         let errors = parseConfig(
             """
             exec-on-workspace-change = ['', 1]
@@ -85,7 +86,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(errors, ["[ERROR] exec-on-workspace-change[1]: Expected type is \'String\'. But actual type is \'Int\'"])
     }
 
-    func testDuplicatedPersistentWorkspaces() {
+    @Test func testDuplicatedPersistentWorkspaces() {
         let errors = parseConfig(
             """
             config-version = 2
@@ -95,7 +96,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(errors, ["[ERROR] persistent-workspaces: Contains duplicated workspace names"])
     }
 
-    func testPersistentWorkspacesAreAvailableOnlySinceVersion2() {
+    @Test func testPersistentWorkspacesAreAvailableOnlySinceVersion2() {
         let errors = parseConfig(
             """
             persistent-workspaces = ['a']
@@ -104,7 +105,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(errors, ["[ERROR] persistent-workspaces: This config option is only available since \'config-version = 2\'"])
     }
 
-    func testWrongTypeForCommand() {
+    @Test func testWrongTypeForCommand() {
         let errors = parseConfig(
             """
             [mode.main.binding]
@@ -114,10 +115,10 @@ final class ConfigTest: XCTestCase {
         assertEquals(errors, ["[ERROR] mode.main.binding.alt-a[0]: Expected type is \'String\'. But actual type is \'Int\'"])
     }
 
-    func testDropBindings() {
+    @Test func testDropBindings() {
         let result = parseConfig(
             """
-            mode.main = {}
+            mode.main.binding = {}
             """,
         )
         assertTrue(result.allowReloadConfig)
@@ -125,7 +126,7 @@ final class ConfigTest: XCTestCase {
         assertTrue(result.config.modes[mainModeId]?.bindings.isEmpty == true)
     }
 
-    func testParseMode() {
+    @Test func testParseMode() {
         let result = parseConfig(
             """
             [mode.main.binding]
@@ -140,7 +141,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testModesMustContainDefaultModeError() {
+    @Test func testModesMustContainDefaultModeError() {
         let result = parseConfig(
             """
             [mode.foo.binding]
@@ -154,7 +155,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.config.modes[mainModeId], nil)
     }
 
-    func testHotkeyParseError() {
+    @Test func testHotkeyParseError() {
         let result = parseConfig(
             """
             [mode.main.binding]
@@ -177,7 +178,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testPermanentWorkspaceNames() {
+    @Test func testPermanentWorkspaceNames() {
         let result = parseConfig(
             """
             [mode.main.binding]
@@ -191,7 +192,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.config.persistentWorkspaces.sorted(), ["1", "2", "3", "4"])
     }
 
-    func testUnknownTopLevelKeyParseError() {
+    @Test func testUnknownTopLevelKeyParseError() {
         let result = parseConfig(
             """
             unknownKey = true
@@ -205,7 +206,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.config.enableNormalizationFlattenContainers, false)
     }
 
-    func testUnknownKeyParseError() {
+    @Test func testUnknownKeyParseError() {
         let result = parseConfig(
             """
             enable-normalization-flatten-containers = false
@@ -220,7 +221,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.config.enableNormalizationFlattenContainers, false)
     }
 
-    func testTypeMismatch() {
+    @Test func testTypeMismatch() {
         let errors = parseConfig(
             """
             enable-normalization-flatten-containers = 'true'
@@ -232,7 +233,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testConfigParseError() {
+    @Test func testConfigParseError() {
         assertFalse(parseConfig("true").allowReloadConfig)
         assertEquals(
             parseConfig("true").strErrors,
@@ -260,23 +261,23 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testMoveWorkspaceToMonitorCommandParsing() {
-        XCTAssertTrue(parseCommand("move-workspace-to-monitor --wrap-around next").cmdOrNil?.flatten().singleOrNil() is MoveWorkspaceToMonitorCommand)
-        XCTAssertTrue(parseCommand("move-workspace-to-display --wrap-around next").cmdOrNil?.flatten().singleOrNil() is MoveWorkspaceToMonitorCommand)
+    @Test func testMoveWorkspaceToMonitorCommandParsing() {
+        #expect(parseCommand("move-workspace-to-monitor --wrap-around next").cmdOrNil?.flatten().singleOrNil() is MoveWorkspaceToMonitorCommand)
+        #expect(parseCommand("move-workspace-to-display --wrap-around next").cmdOrNil?.flatten().singleOrNil() is MoveWorkspaceToMonitorCommand)
     }
 
-    func testParseTiles() {
+    @Test func testParseTiles() {
         let command = parseCommand("layout tiles h_tiles v_tiles list h_list v_list").cmdOrNil?.flatten().singleOrNil()
-        XCTAssertTrue(command is LayoutCommand)
+        #expect(command is LayoutCommand)
         assertEquals((command as! LayoutCommand).args.toggleBetween.val, [.tiles, .h_tiles, .v_tiles, .tiles, .h_tiles, .v_tiles])
 
         guard case .help = parseCommand("layout tiles -h") else {
-            XCTFail()
+            Issue.record()
             return
         }
     }
 
-    func testSplitCommandAndFlattenContainersNormalization() {
+    @Test func testSplitCommandAndFlattenContainersNormalization() {
         let errors = parseConfig(
             """
             enable-normalization-flatten-containers = true
@@ -296,7 +297,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(errors, [expected])
     }
 
-    func testParseWorkspaceToMonitorAssignment() {
+    @Test func testParseWorkspaceToMonitorAssignment() {
         let result = parseConfig(
             """
             [workspace-to-monitor-force-assignment]
@@ -334,7 +335,7 @@ final class ConfigTest: XCTestCase {
         assertEquals([:], defaultConfig.workspaceToMonitorForceAssignment)
     }
 
-    func testParseOnWindowDetected() {
+    @Test func testParseOnWindowDetected() {
         let result = parseConfig(
             """
             on-window-detected = [
@@ -366,9 +367,9 @@ final class ConfigTest: XCTestCase {
             """,
         )
         let matcher6Args = TestCmdArgs(rawArgs: [])
-            .copy(\.lhs, .initialized(.app(.appBundleId)))
-            .copy(\.infixOperator, .initialized(.equals))
-            .copy(\.rhs, .initialized("org.alacritty"))
+            .with(\.lhs, .initialized(.app(.appBundleId)))
+            .with(\.infixOperator, .initialized(.equals))
+            .with(\.rhs, .initialized("org.alacritty"))
         assertEquals(result.config.onWindowDetected, [
             WindowDetectedCallback( // 0
                 matcher: .command(.cmd(TrueCommand.instance)),
@@ -412,13 +413,14 @@ final class ConfigTest: XCTestCase {
         ])
 
         assertEquals(result.strErrors, [
+            "[ERROR] on-window-detected[2]: empty table is not allowed here",
             "[ERROR] on-window-detected[2]: Omitting \'if\' is error prone. You can use `if = \'true\'` to preserve the previous behavior.\nBut heads up! You may have missed \'check-further-callbacks = true\'",
             "[ERROR] on-window-detected[2]: \'run\' is mandatory key",
             "[ERROR] on-window-detected[7]: Omitting \'if\' is error prone. You can use `if = \'true\'` to preserve the previous behavior.\nBut heads up! You may have missed \'check-further-callbacks = true\'",
         ])
     }
 
-    func testParseOnWindowDetected2() {
+    @Test func testParseOnWindowDetected2() {
         let result = parseConfig(
             """
             on-window-detected = [
@@ -437,7 +439,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.errors, [])
     }
 
-    func testParseInlineTables() {
+    @Test func testParseInlineTables() {
         let errors = parseConfig(
             """
             on-window-detected = [
@@ -455,7 +457,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(errors, [])
     }
 
-    func testTomlParser() {
+    @Test func testTomlParser() {
         // https://github.com/nikitabobko/AeroSpace/issues/1064
         let errors = parseConfig(
             """
@@ -471,7 +473,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(errors, ["[ERROR] (Line 1) Syntax error: invalid or missing key."])
     }
 
-    func testParseOnWindowDetectedRegex() {
+    @Test func testParseOnWindowDetectedRegex() {
         let result = parseConfig(
             """
             [[on-window-detected]]
@@ -484,13 +486,13 @@ final class ConfigTest: XCTestCase {
         assertEquals(result.errors, [])
     }
 
-    func testRegex() {
+    @Test func testRegex() {
         var devNull: [String] = []
-        XCTAssertTrue("System Settings".contains(caseInsensitiveRegex: CaseInsensitiveRegex.new("settings").getOrNil(appendErrorTo: &devNull)!))
-        XCTAssertTrue(!"System Settings".contains(caseInsensitiveRegex: CaseInsensitiveRegex.new("^settings^").getOrNil(appendErrorTo: &devNull)!))
+        #expect("System Settings".contains(caseInsensitiveRegex: CaseInsensitiveRegex.new("settings").getOrNil(appendErrorTo: &devNull)!))
+        #expect(!"System Settings".contains(caseInsensitiveRegex: CaseInsensitiveRegex.new("^settings^").getOrNil(appendErrorTo: &devNull)!))
     }
 
-    func testParseGaps() {
+    @Test func testParseGaps() {
         let result1 = parseConfig(
             """
             [gaps]
@@ -542,7 +544,7 @@ final class ConfigTest: XCTestCase {
         ])
     }
 
-    func testAfterLoginCommandDeprecation() {
+    @Test func testAfterLoginCommandDeprecation() {
         let result = parseConfig(
             """
             after-login-command = ['exec-and-forget echo hi']
@@ -562,7 +564,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(okResult.errors, [])
     }
 
-    func testOnFocusChangedAsSingleStringAndAsList() {
+    @Test func testOnFocusChangedAsSingleStringAndAsList() {
         let result = parseConfig(
             """
             on-focus-changed = 'focus left'
@@ -572,12 +574,12 @@ final class ConfigTest: XCTestCase {
         )
         assertEquals(result.errors, [])
         assertEquals(result.config.onFocusChanged.flatten().count, 1)
-        XCTAssertTrue(result.config.onFocusChanged.flatten()[0] is FocusCommand)
+        #expect(result.config.onFocusChanged.flatten()[0] is FocusCommand)
         assertEquals(result.config.onModeChanged.flatten().count, 2)
         assertEquals(result.config.onFocusedMonitorChanged.flatten().count, 1)
     }
 
-    func testOnFocusChangedTypeError() {
+    @Test func testOnFocusChangedTypeError() {
         let result = parseConfig(
             """
             on-focus-changed = 1
@@ -589,7 +591,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testParseDefaultRootContainerLayout() {
+    @Test func testParseDefaultRootContainerLayout() {
         let result = parseConfig(
             """
             default-root-container-layout = 'accordion'
@@ -617,7 +619,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testParseDefaultRootContainerOrientation() {
+    @Test func testParseDefaultRootContainerOrientation() {
         let result = parseConfig(
             """
             default-root-container-orientation = 'vertical'
@@ -637,7 +639,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testDeprecatedIndentForNestedContainers() {
+    @Test func testDeprecatedIndentForNestedContainers() {
         let errors = parseConfig(
             """
             indent-for-nested-containers-with-the-same-orientation = 30
@@ -649,7 +651,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testDeprecatedNonEmptyWorkspacesRootContainersLayoutOnStartup() {
+    @Test func testDeprecatedNonEmptyWorkspacesRootContainersLayoutOnStartup() {
         // The 'smart' value used to be accepted and is silently dropped now
         let smart = parseConfig(
             """
@@ -669,7 +671,7 @@ final class ConfigTest: XCTestCase {
         )
     }
 
-    func testOutdatedConfigVersionWarning() {
+    @Test func testOutdatedConfigVersionWarning() {
         let result = parseConfig(
             """
             config-version = 1
@@ -677,7 +679,7 @@ final class ConfigTest: XCTestCase {
         )
         assertEquals(result.errors, [])
         assertEquals(result.warnings.count, 1)
-        XCTAssertTrue(result.warnings[0].message.contains("'config-version = 1' is outdated"))
+        #expect(result.warnings[0].message.contains("'config-version = 1' is outdated"))
 
         // config-version = 2 (the current max) should not produce the outdated warning
         let v2 = parseConfig(
@@ -689,7 +691,7 @@ final class ConfigTest: XCTestCase {
         assertEquals(v2.warnings, [])
     }
 
-    func testTopLevelTypeIsNotTable() {
+    @Test func testTopLevelTypeIsNotTable() {
         // TOML arrays at the root parse as a key error, but values returning a non-table json hit the
         // preventConfigReload path. Use a doubled array-of-tables header to trigger TOML syntax failure
         // and confirm that an unparsable TOML is flagged as preventing reload.
@@ -697,7 +699,7 @@ final class ConfigTest: XCTestCase {
         assertFalse(result.allowReloadConfig)
     }
 
-    func testParseKeyMapping() {
+    @Test func testParseKeyMapping() {
         let result = parseConfig(
             """
             [key-mapping.key-notation-to-key-code]

@@ -1,39 +1,40 @@
 @testable import AppBundle
 import Common
-import XCTest
+import Testing
 
 @MainActor
-final class RunCallbackCommandTest: XCTestCase {
-    override func setUp() async throws { setUpWorkspacesForTests() }
+@Suite(.serializedGlobally)
+struct RunCallbackCommandTest {
+    init() { setUpWorkspacesForTests() }
 
-    func testParse() {
+    @Test func testParse() {
         testParseSingleCommandSucc(
             "run-callback on-window-detected",
-            RunCallbackCmdArgs(rawArgs: []).copy(\.callback, .initialized(.onWindowDetected)),
+            RunCallbackCmdArgs(rawArgs: []).with(\.callback, .initialized(.onWindowDetected)),
         )
         testParseSingleCommandSucc(
             "run-callback --for-every-window on-window-detected",
             RunCallbackCmdArgs(rawArgs: [])
-                .copy(\.callback, .initialized(.onWindowDetected))
-                .copy(\.forEveryWindow, true),
+                .with(\.callback, .initialized(.onWindowDetected))
+                .with(\.forEveryWindow, true),
         )
         testParseSingleCommandSucc(
             "run-callback --window-id 42 on-window-detected",
             RunCallbackCmdArgs(rawArgs: [])
-                .copy(\.callback, .initialized(.onWindowDetected))
-                .copy(\.windowId, 42),
+                .with(\.callback, .initialized(.onWindowDetected))
+                .with(\.windowId, 42),
         )
         testParseSingleCommandSucc(
             "run-callback on-focus-changed",
-            RunCallbackCmdArgs(rawArgs: []).copy(\.callback, .initialized(.onFocusChanged)),
+            RunCallbackCmdArgs(rawArgs: []).with(\.callback, .initialized(.onFocusChanged)),
         )
         testParseSingleCommandSucc(
             "run-callback on-focused-monitor-changed",
-            RunCallbackCmdArgs(rawArgs: []).copy(\.callback, .initialized(.onFocusedMonitorChanged)),
+            RunCallbackCmdArgs(rawArgs: []).with(\.callback, .initialized(.onFocusedMonitorChanged)),
         )
     }
 
-    func testParseFailure() {
+    @Test func testParseFailure() {
         testParseCommandFail("run-callback", msg: "ERROR: Argument '<callback>' is mandatory", exitCode: 2)
         testParseCommandFail(
             "run-callback bogus",
@@ -42,7 +43,7 @@ final class RunCallbackCommandTest: XCTestCase {
         )
         testParseCommandFail(
             "run-callback --for-every-window --window-id 1 on-window-detected",
-            msg: "ERROR: Conflicting options: --for-every-window, --window-id",
+            msg: "ERROR: Conflicting flags: --for-every-window, --window-id",
             exitCode: 2,
         )
         testParseCommandFail(
