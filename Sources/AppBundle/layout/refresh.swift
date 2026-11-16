@@ -179,7 +179,11 @@ func refreshModel_nonCancellable() async {
 private func garbageCollectWindowsMissingInWindowServer() {
     let windows = MacWindow.allWindows.compactMap { w in w.nativeWindowId.map { (w, $0) } }
     let existing = windows.map(\.1).toSet().filterExistingInWindowServer()
-    for (window, nativeWindowId) in windows where !existing.contains(nativeWindowId) {
+    let missing = windows.filter { !existing.contains($0.1) }
+    if missing.isEmpty { return }
+    let windowServer = WindowServerSnapshot.current()
+    // A closed native tab hands its window id over to the next tab. Leave it to the regular refresh
+    for (window, _) in missing where !window.mightBeActiveNativeTab(windowServer) {
         window.lifeStatus = .dead
         window.garbageCollect(skipClosedWindowsCache: false)
     }
@@ -274,7 +278,7 @@ func refreshObs(_: AXObserver, ax: AXUIElement, notif: CFString, refcon: UnsafeM
         // A closed native tab hands its window id over to the next tab (see nonidempotentNativeTabSwapHeuristic),
         // the regular refresh session sorts that out
         if let destroyedWindowId, let pid, let window = Window.get(byNativeId: destroyedWindowId, pid: pid) as? MacWindow,
-           !window.macApp.hasNativeTabs(window.windowId)
+           !window.mightBeActiveNativeTab(.current())
         {
             window.lifeStatus = .dead
             window.garbageCollect(skipClosedWindowsCache: false)

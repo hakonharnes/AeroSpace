@@ -32,15 +32,7 @@ private let bootTime: Int = {
 /// Call it at the end of every refresh session. Writes only if something changed, debounced
 @MainActor func persistLayoutIfNeeded() {
     if !config.restoreLayoutOnRestart || isStartup || isUnitTest { return }
-    let layout = PersistedLayout(
-        bootTime: bootTime,
-        focusedWorkspace: globalFocus.workspace.name,
-        monitors: globalUnsortedMonitorInfos.map(PersistedMonitor.init),
-        workspaces: Workspace.all.map(PersistedWorkspace.init),
-    )
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys]
-    guard let data = try? encoder.encode(layout), data != lastPersistedLayout else { return }
+    guard let data = encodePersistedLayout(bootTime: bootTime, nativeIdOf: macosWindowIdAndPid), data != lastPersistedLayout else { return }
     lastPersistedLayout = data
     persistLayoutTask?.cancel()
     persistLayoutTask = Task.startUnstructured { @MainActor in
@@ -52,6 +44,29 @@ private let bootTime: Int = {
             try? data.write(to: url, options: .atomic)
         }.value
     }
+}
+
+/// The macOS window id and the pid of the window. nil if the window can't be persisted
+typealias NativeIdResolver = @MainActor (OpaqueWindowId) -> (id: UInt32, pid: pid_t)?
+
+@MainActor private func macosWindowIdAndPid(_ windowId: OpaqueWindowId) -> (id: UInt32, pid: pid_t)? {
+    guard let window = MacWindow.get(byId: windowId) as? MacWindow, let nativeWindowId = window.nativeWindowId else { return nil }
+    return (nativeWindowId, window.app.pid)
+}
+
+@MainActor func encodePersistedLayout(bootTime: Int, nativeIdOf: NativeIdResolver) -> Data? {
+    let workspaces = Workspace.all.map { PersistedWorkspace($0, nativeIdOf) }
+    let layout = PersistedLayout(
+        bootTime: bootTime,
+        focusedWorkspace: globalFocus.workspace.name,
+        monitors: globalUnsortedMonitorInfos.map(PersistedMonitor.init),
+        workspaces: workspaces,
+        // Not needed to restore. Kept so that the fork versions that required it can still read the file
+        windowIds: workspaces.flatMap(\.allWindowIds).sorted(),
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return try? encoder.encode(layout)
 }
 
 /// Loads the snapshot of the previous AeroSpace instance into closedWindowsCache.
@@ -95,6 +110,7 @@ private struct PersistedLayout: Codable {
     let focusedWorkspace: String?
     let monitors: [PersistedMonitor]
     let workspaces: [PersistedWorkspace]
+    var windowIds: [UInt32]? = nil
 
     @MainActor func toFrozenWorld() -> FrozenWorld {
         var windowIds: Set<OpaqueWindowId> = []
@@ -155,14 +171,16 @@ private struct PersistedWorkspace: Codable {
     let floatingWindows: [PersistedWindow]
     let macosUnconventionalWindows: [PersistedWindow]
 
-    @MainActor init(_ workspace: Workspace) {
+    @MainActor init(_ workspace: Workspace, _ nativeIdOf: NativeIdResolver) {
         let frozen = FrozenWorkspace(workspace)
         name = frozen.name
         monitor = PersistedMonitor(workspace.workspaceMonitorInfo)
-        rootTilingNode = PersistedContainer(frozen.rootTilingNode)
-        floatingWindows = frozen.floatingWindows.compactMap(PersistedWindow.init)
-        macosUnconventionalWindows = frozen.macosUnconventionalWindows.compactMap(PersistedWindow.init)
+        rootTilingNode = PersistedContainer(frozen.rootTilingNode, nativeIdOf)
+        floatingWindows = frozen.floatingWindows.compactMap { PersistedWindow($0, nativeIdOf) }
+        macosUnconventionalWindows = frozen.macosUnconventionalWindows.compactMap { PersistedWindow($0, nativeIdOf) }
     }
+
+    var allWindowIds: [UInt32] { rootTilingNode.allWindowIds + floatingWindows.map(\.id) + macosUnconventionalWindows.map(\.id) }
 }
 
 private enum PersistedTreeNode: Codable {
@@ -176,16 +194,25 @@ private struct PersistedContainer: Codable {
     let orientation: Orientation
     let weight: CGFloat
 
-    @MainActor init(_ container: FrozenContainer) {
+    @MainActor init(_ container: FrozenContainer, _ nativeIdOf: NativeIdResolver) {
         children = container.children.compactMap {
             switch $0 {
-                case .window(let w): PersistedWindow(w).map { .window($0) }
-                case .container(let c): .container(PersistedContainer(c))
+                case .window(let w): PersistedWindow(w, nativeIdOf).map { .window($0) }
+                case .container(let c): .container(PersistedContainer(c, nativeIdOf))
             }
         }
         layout = container.layout
         orientation = container.orientation
         weight = container.weight
+    }
+
+    var allWindowIds: [UInt32] {
+        children.flatMap {
+            switch $0 {
+                case .window(let w): [w.id]
+                case .container(let c): c.allWindowIds
+            }
+        }
     }
 }
 
@@ -196,10 +223,10 @@ private struct PersistedWindow: Codable {
     let pid: pid_t?
     let weight: CGFloat
 
-    @MainActor init?(_ window: FrozenWindow) {
-        guard let macWindow = MacWindow.get(byId: window.id) as? MacWindow, let nativeWindowId = macWindow.nativeWindowId else { return nil }
-        id = nativeWindowId
-        pid = macWindow.app.pid
+    @MainActor init?(_ window: FrozenWindow, _ nativeIdOf: NativeIdResolver) {
+        guard let native = nativeIdOf(window.id) else { return nil }
+        id = native.id
+        pid = native.pid
         weight = window.weight
     }
 }

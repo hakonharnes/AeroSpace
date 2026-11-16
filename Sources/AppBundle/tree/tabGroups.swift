@@ -184,3 +184,50 @@ extension Rect {
             abs(width - other.width) <= tolerance && abs(height - other.height) <= tolerance
     }
 }
+
+/// What WindowServer knows about the windows of all apps, including the windows that are not on screen
+struct WindowServerSnapshot {
+    struct Entry {
+        let id: UInt32
+        let pid: pid_t
+        let isOnScreen: Bool
+        let size: CGSize
+    }
+
+    let entries: [UInt32: Entry]
+
+    static func current() -> WindowServerSnapshot {
+        let infos = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary] ?? []
+        var entries: [UInt32: Entry] = [:]
+        for info in infos {
+            guard let id = (info[kCGWindowNumber] as? NSNumber)?.uint32Value,
+                  let pid = (info[kCGWindowOwnerPID] as? NSNumber)?.int32Value,
+                  (info[kCGWindowLayer] as? NSNumber)?.intValue == 0,
+                  let boundsDict = info[kCGWindowBounds] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+            else { continue }
+            let isOnScreen = (info[kCGWindowIsOnscreen] as? NSNumber)?.boolValue ?? false
+            entries[id] = Entry(id: id, pid: pid, isOnScreen: isOnScreen, size: bounds.size)
+        }
+        return WindowServerSnapshot(entries: entries)
+    }
+}
+
+extension MacWindow {
+    /// The window might be the active tab of a native AppKit tab group (Finder, Terminal, ...). When the active tab is
+    /// closed, MacApp.nonidempotentNativeTabSwapHeuristic hands the window id over to the next tab, and the window
+    /// keeps its place in the tree. Garbage collecting the window before the heuristic runs loses the place.
+    ///
+    /// Upstream learns about a tab group only after the first tab switch. The background tabs of a tab group are
+    /// ordered out: WindowServer knows them, but they are not on screen. They have the size of the active tab
+    @MainActor func mightBeActiveNativeTab(_ windowServer: WindowServerSnapshot) -> Bool {
+        if macApp.hasNativeTabs(windowId) { return true }
+        guard let nativeWindowId else { return false }
+        // The closed window might be gone from WindowServer already. The size AeroSpace applied is just as good
+        guard let size = windowServer.entries[nativeWindowId]?.size ?? lastAppliedLayoutPhysicalRect?.size else { return false }
+        return windowServer.entries.values.contains {
+            $0.pid == app.pid && $0.id != nativeWindowId && !$0.isOnScreen &&
+                abs($0.size.width - size.width) <= 2 && abs($0.size.height - size.height) <= 2
+        }
+    }
+}

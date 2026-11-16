@@ -122,7 +122,7 @@ final class MacWindow: Window {
                     if focus.windowOrNil?.app.pid != app.pid, let heir = deadWindowFocus.windowOrNil {
                         // Force focus to fix macOS annoyance with focused apps without windows.
                         //   https://github.com/nikitabobko/AeroSpace/issues/65
-                        forceNativeFocusIfLostAfterWindowDeath(heir, deadWindowId: windowId)
+                        forceNativeFocusIfLostAfterWindowDeath(heir, deadWindow: nativeWindowId.map { ($0, app.pid) })
                     }
                 case .macosPopupWindowsContainer, // Don't switch back on popup destruction
                      .workspace, // Workspace is invalid parent for windows

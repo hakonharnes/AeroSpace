@@ -134,21 +134,25 @@ private let focusStealGuardDuration: TimeInterval = 1
 /// yet (e.g. a "checking for updates" window followed by the result dialog), or another app is active. Forcing the focus
 /// would then activate and raise the heir over that window. Ask the frontmost app first, and force the focus only if it
 /// has no focused window, it still reports the dead one, or macOS jumped to a window on an invisible workspace
-@MainActor func forceNativeFocusIfLostAfterWindowDeath(_ heir: Window, deadWindowId: OpaqueWindowId) {
+/// - Parameter deadWindow: the macOS window id and the pid of the dead window. Captured before the window is garbage
+///   collected. Native ids, because the focused window might not be registered by AeroSpace yet
+@MainActor func forceNativeFocusIfLostAfterWindowDeath(_ heir: Window, deadWindow: (nativeId: UInt32, pid: pid_t)?) {
     forceNativeFocusAfterWindowDeathTask?.cancel()
     forceNativeFocusAfterWindowDeathTask = Task.startUnstructured { @MainActor in
-        let nativeFocusedId: OpaqueWindowId? = if let frontmost = NSWorkspace.shared.frontmostApplication,
-                                          let app = try? await MacApp.getOrRegister(frontmost)
+        var focused: (app: MacApp, nativeId: UInt32)? = nil
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           let app = try? await MacApp.getOrRegister(frontmost),
+           let nativeId = try? await app.getAxFocusedNativeWindowId(.cancellable)
         {
-            try? await app.getAxFocusedWindowId(.cancellable)
-        } else {
-            nil
+            focused = (app, nativeId)
         }
         if Task.isCancelled { return }
-        if let nativeFocusedId, nativeFocusedId != deadWindowId,
-           Window.get(byId: nativeFocusedId)?.isOnInvisibleWorkspace != true
-        {
-            return // The native focus is on a live window. The refresh session syncs it
+        if let focused, !(focused.nativeId == deadWindow?.nativeId && focused.app.pid == deadWindow?.pid) {
+            // An unregistered window (e.g. a dialog that has just replaced the dead window) is a live window too
+            let registered = focused.app.opaqueWindowId(of: focused.nativeId).flatMap { Window.get(byId: $0) }
+            if registered?.isOnInvisibleWorkspace != true {
+                return // The native focus is on a live window. The refresh session syncs it
+            }
         }
         guard globalFocus.windowOrNil == heir else { return } // Something else has moved the focus in the meantime
         heir.nativeFocus()

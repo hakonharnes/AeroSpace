@@ -148,12 +148,12 @@ final class MacApp: AbstractApp {
         return try await MacWindow.getOrRegister(windowId: getOrRegisterOpaqueWindowId(nativeWindowId), macApp: self)
     }
 
-    /// The id of the app's focused window. Unlike getFocusedWindow, the window isn't registered
-    @MainActor func getAxFocusedWindowId(_ cm: CancellationMode) async throws -> OpaqueWindowId? {
-        let nativeWindowId = try await thread?.runInLoop(cm) { [axApp] job in
+    /// The macOS window id of the app's focused window. Unlike getFocusedWindow, the window isn't registered.
+    /// It's the native id on purpose: the window might be unknown to AeroSpace yet (no OpaqueWindowId)
+    func getAxFocusedNativeWindowId(_ cm: CancellationMode) async throws -> UInt32? {
+        try await thread?.runInLoop(cm) { [axApp] job in
             axApp.threadGuarded.get(Ax.focusedWindowAttr)?.windowId
         }
-        return nativeWindowId.flatMap { opaqueWindowId(of: $0) }
     }
 
     /// The window that holds Secure Input: the one with a focused password field (AXSecureTextField), or, if no field
